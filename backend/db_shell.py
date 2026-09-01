@@ -22,10 +22,39 @@ DENTRO DO CONSOLE:
 
 import sqlite3
 import sys
+from pathlib import Path
 
-from backend.app.config import DATA_DIR
+# ---------------------------------------------------------------------------
+# ATENCAO: este arquivo usa SOMENTE a biblioteca padrao do Python
+# (sqlite3 e pathlib). Ele NAO importa nada do resto do projeto.
+#
+# POR QUE ISSO E' PROPOSITAL: assim o console funciona mesmo sem o ambiente
+# virtual ativado. Se ele importasse backend.app.config, precisaria do
+# pydantic-settings instalado, e voce receberia
+#     ModuleNotFoundError: No module named 'pydantic_settings'
+# ao rodar com o Python do sistema. Uma ferramenta de emergencia (que serve
+# para investigar o banco quando algo deu errado) nao pode depender de que
+# tudo esteja instalado corretamente.
+#
+# O caminho e' calculado a partir da posicao deste arquivo:
+#   __file__            -> backend/db_shell.py
+#   .parents[0]         -> backend
+#   .parents[1]         -> raiz do projeto
+# ---------------------------------------------------------------------------
+DB_PATH = Path(__file__).resolve().parents[1] / "data" / "app.db"
 
-DB_PATH = DATA_DIR / "app.db"
+# ---------------------------------------------------------------------------
+# ACENTOS NO CONSOLE DO WINDOWS
+# O terminal do Windows costuma usar a codificacao cp1252, enquanto o banco
+# guarda texto em UTF-8. Sem esta linha, "Antonio" com acento apareceria como
+# "�ntonio". reconfigure() forca a saida para UTF-8.
+# errors="replace" garante que, se algum caractere ainda assim nao puder ser
+# exibido, o programa mostre um simbolo em vez de quebrar.
+# ---------------------------------------------------------------------------
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass  # em terminais antigos, apenas segue sem reconfigurar
 TABELAS = ["clients", "tickets", "equipments", "equipment_readings", "alerts"]
 
 
