@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!--
+  index.html -- DASHBOARD
+  As paginas nao usam framework nem templating: o menu lateral e' repetido
+  em cada arquivo. E' uma escolha consciente -- sem build step, o que voce
+  ve no arquivo e' exatamente o que o navegador recebe. Facil de explicar.
+-->
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard — HelpDesk & Monitoring</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <!-- MENU LATERAL (repetido em todas as paginas) -->
+      <aside class="sidebar">
+        <div class="sidebar__brand">Help<span>Desk</span></div>
+        <nav class="sidebar__nav">
+          <a href="index.html" data-page="index.html"><span class="icon">▤</span> Dashboard</a>
+          <a href="clientes.html" data-page="clientes.html"><span class="icon">◍</span> Clientes</a>
+          <a href="chamados.html" data-page="chamados.html"><span class="icon">✉</span> Chamados</a>
+          <a href="equipamentos.html" data-page="equipamentos.html"><span class="icon">▣</span> Equipamentos</a>
+          <a href="alertas.html" data-page="alertas.html"><span class="icon">⚠</span> Alertas</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <div class="page-header">
+          <div>
+            <h1>Dashboard</h1>
+            <p>Visão geral da operação — dados vindos da API em tempo real.</p>
+          </div>
+          <button class="btn btn--ghost" onclick="location.reload()">↻ Atualizar</button>
+        </div>
+
+        <!-- CARTOES: preenchidos por dashboard.js a partir de /api/analytics/summary -->
+        <div class="stat-grid" id="stat-grid">
+          <div class="state state--loading">Carregando indicadores...</div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel__head"><h2>Chamados por categoria</h2></div>
+            <div class="panel__body" id="chart-category">
+              <div class="state state--loading">Carregando...</div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel__head"><h2>Ranking de clientes</h2></div>
+            <div class="panel__body" id="chart-ranking">
+              <div class="state state--loading">Carregando...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head"><h2>Tempo médio de resolução por categoria</h2></div>
+          <div class="panel__body" id="chart-resolution">
+            <div class="state state--loading">Carregando...</div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/dashboard.js"></script>
+  </body>
+</html>

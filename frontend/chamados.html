@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chamados — HelpDesk & Monitoring</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar__brand">Help<span>Desk</span></div>
+        <nav class="sidebar__nav">
+          <a href="index.html" data-page="index.html"><span class="icon">▤</span> Dashboard</a>
+          <a href="clientes.html" data-page="clientes.html"><span class="icon">◍</span> Clientes</a>
+          <a href="chamados.html" data-page="chamados.html"><span class="icon">✉</span> Chamados</a>
+          <a href="equipamentos.html" data-page="equipamentos.html"><span class="icon">▣</span> Equipamentos</a>
+          <a href="alertas.html" data-page="alertas.html"><span class="icon">⚠</span> Alertas</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <div class="page-header">
+          <div>
+            <h1>Chamados</h1>
+            <p>Filtros aplicados no <strong>banco</strong> (cláusula WHERE), não em JavaScript.</p>
+          </div>
+          <button class="btn" onclick="openModal('modal-ticket')">+ Abrir chamado</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head">
+            <div class="filters">
+              <div class="field">
+                <label for="f-status">Status</label>
+                <select id="f-status">
+                  <option value="">Todos</option>
+                  <option value="ABERTO">Aberto</option>
+                  <option value="EM_ANDAMENTO">Em andamento</option>
+                  <option value="FINALIZADO">Finalizado</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="f-priority">Prioridade</label>
+                <select id="f-priority">
+                  <option value="">Todas</option>
+                  <option value="ALTA">Alta</option>
+                  <option value="MEDIA">Média</option>
+                  <option value="BAIXA">Baixa</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="panel__body panel__body--flush">
+            <div id="tickets-table"><div class="state state--loading">Carregando...</div></div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- MODAL: abrir chamado -->
+    <div class="modal" id="modal-ticket" hidden>
+      <div class="modal__box">
+        <div class="modal__head">
+          <h2>Abrir chamado</h2>
+          <button class="modal__close" onclick="closeModal('modal-ticket')">&times;</button>
+        </div>
+        <div class="modal__body">
+          <form id="form-ticket" class="form-grid" novalidate>
+            <div class="field">
+              <label>Cliente *</label>
+              <!-- populado por chamados.js com GET /api/clients -->
+              <select name="client_id" required>
+                <option value="">Carregando clientes...</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Título *</label>
+              <input name="title" type="text" required />
+            </div>
+            <div class="field">
+              <label>Descrição *</label>
+              <textarea name="description" required></textarea>
+            </div>
+            <div class="field">
+              <label>Categoria *</label>
+              <input name="category" type="text" placeholder="Rede, Hardware, Software..." required />
+            </div>
+            <div class="field">
+              <label>Prioridade *</label>
+              <select name="priority" required>
+                <option value="BAIXA">Baixa</option>
+                <option value="MEDIA" selected>Média</option>
+                <option value="ALTA">Alta</option>
+              </select>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn btn--ghost" onclick="closeModal('modal-ticket')">Cancelar</button>
+              <button type="submit" class="btn">Abrir chamado</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: detalhe do chamado + mudanca de status -->
+    <div class="modal" id="modal-ticket-detail" hidden>
+      <div class="modal__box">
+        <div class="modal__head">
+          <h2 id="td-title">Chamado</h2>
+          <button class="modal__close" onclick="closeModal('modal-ticket-detail')">&times;</button>
+        </div>
+        <div class="modal__body" id="td-body"></div>
+      </div>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/chamados.js"></script>
+  </body>
+</html>

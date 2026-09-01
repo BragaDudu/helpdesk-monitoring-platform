@@ -1,0 +1,16 @@
+# ---------------------------------------------------------------------------
+# Dependencias do projeto. Instalar com:  pip install -r requirements.txt
+# Cada linha tem versao FIXA (==) para que o projeto rode igual em qualquer
+# maquina. Isso se chama "pinning" e evita o classico "na minha maquina funciona".
+# ---------------------------------------------------------------------------
+
+fastapi==0.115.6          # framework web: rotas, validacao, Swagger automatico
+uvicorn[standard]==0.34.0 # servidor ASGI que realmente escuta a porta TCP
+SQLAlchemy==2.0.36        # ORM: traduz classes Python <-> tabelas SQL
+pydantic==2.10.4          # validacao de dados (usado pelo FastAPI)
+pydantic-settings==2.7.0  # le variaveis do arquivo .env com validacao de tipo
+email-validator==2.2.0    # habilita o tipo EmailStr do Pydantic
+
+# --- somente para desenvolvimento / testes ---
+pytest==8.3.4             # framework de testes
+httpx==0.28.1             # cliente HTTP usado pelo TestClient do FastAPI

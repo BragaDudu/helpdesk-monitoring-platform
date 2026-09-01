@@ -1,0 +1,22 @@
+# --- Banco de dados: NUNCA versionar ---
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# --- Segredos ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- Editores / SO ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
