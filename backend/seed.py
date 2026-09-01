@@ -5,6 +5,7 @@ COMO USAR (sempre a partir da RAIZ do projeto):
     python -m backend.seed            # popula (recusa se ja houver dados)
     python -m backend.seed --reset    # APAGA TUDO e popula de novo
     python -m backend.seed --status   # so mostra o que existe hoje
+    python -m backend.seed --wipe     # ESVAZIA o banco (nao popula nada)
 
 O QUE E' CRIADO:
     20 clientes  |  100 chamados  |  18 equipamentos
@@ -482,7 +483,19 @@ def run(reset: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    if "--status" in sys.argv:
+    if "--wipe" in sys.argv:
+        # ESVAZIA o banco sem popular nada. Use quando quiser apresentar o
+        # sistema partindo do ZERO e inserir os dados voce mesmo, pela tela.
+        # A ordem de exclusao respeita as foreign keys (filhos antes dos pais).
+        session = SessionLocal()
+        try:
+            print("Esvaziando o banco (todas as tabelas)...")
+            _wipe(session)
+            print("Banco vazio. Agora so tera os dados que VOCE inserir.")
+            _print_status(session)
+        finally:
+            session.close()
+    elif "--status" in sys.argv:
         session = SessionLocal()
         try:
             print(f"Banco: {settings.DATABASE_URL_RESOLVED}")

@@ -130,6 +130,19 @@ Os alertas nascem da regra dos 80°C (o seed chama o mesmo service da API).
 - Rodar de novo **não duplica** (avisa que já há dados).
 - Para recomeçar do zero: `python -m backend.seed --reset`
 - Só ver o que existe: `python -m backend.seed --status`
+- **Esvaziar o banco** (usar só dados que você inserir): `python -m backend.seed --wipe`
+
+> O seed é opcional. O sistema funciona perfeitamente com o banco vazio —
+> basta cadastrar pela interface.
+
+### Explorar o banco pelo terminal
+
+```bash
+python -m backend.db_shell
+```
+
+Console SQL próprio (o Windows não traz o `sqlite3.exe`). Atalhos:
+`.tabelas`, `.contar`, `.schema <tabela>`, `.sair`.
 
 ## 8. Como executar (rodar a aplicação)
 
