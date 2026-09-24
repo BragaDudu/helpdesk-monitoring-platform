@@ -65,7 +65,7 @@ def test_alerta_persiste_e_associa_leitura(client, sample_equipment):
     alert = r["alert"]
     assert alert["reading_id"] == reading_id
 
-    lista = client.get(f"/api/equipments/{sample_equipment['id']}/alerts").json()
+    lista = client.get(f"/api/equipments/{sample_equipment['id']}/alerts").json()["items"]
     assert len(lista) == 1
     assert lista[0]["temperature"] == 90.0
 
@@ -113,4 +113,4 @@ def test_resolver_alerta(client, sample_equipment):
     assert r.status_code == 200
     assert r.json()["status"] == "RESOLVIDO"
     # some da contagem de abertos
-    assert len(client.get("/api/alerts?status=ABERTO").json()) == 0
+    assert client.get("/api/alerts?status=ABERTO").json()["total"] == 0

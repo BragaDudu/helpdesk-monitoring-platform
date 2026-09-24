@@ -4,7 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chamados — HelpDesk & Monitoring</title>
-    <link rel="stylesheet" href="css/style.css" />
+    <!-- ★ GUARDA DE SESSAO -- roda ANTES de tudo.
+         Sem token, redireciona para o login imediatamente. Se esperasse o
+         DOMContentLoaded, a tela apareceria vazia e dispararia quatro
+         erros 401 antes de redirecionar. -->
+    <script src="js/auth.js?v=11"></script>
+    <script>if (!auth.exigirLogin()) { throw new Error("redirecionando"); }</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" />
+    <link rel="stylesheet" href="css/style.css?v=11" />
   </head>
   <body>
     <div class="layout">
@@ -17,6 +27,8 @@
           <a href="equipamentos.html" data-page="equipamentos.html"><span class="icon">▣</span> Equipamentos</a>
           <a href="alertas.html" data-page="alertas.html"><span class="icon">⚠</span> Alertas</a>
         </nav>
+        <!-- preenchido por ui.js -> montarSessao() -->
+        <div class="sidebar__foot"></div>
       </aside>
 
       <main class="content">
@@ -29,27 +41,37 @@
         </div>
 
         <div class="panel">
-          <div class="panel__head">
-            <div class="filters">
-              <div class="field">
-                <label for="f-status">Status</label>
-                <select id="f-status">
-                  <option value="">Todos</option>
-                  <option value="ABERTO">Aberto</option>
-                  <option value="EM_ANDAMENTO">Em andamento</option>
-                  <option value="FINALIZADO">Finalizado</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="f-priority">Prioridade</label>
-                <select id="f-priority">
-                  <option value="">Todas</option>
-                  <option value="ALTA">Alta</option>
-                  <option value="MEDIA">Média</option>
-                  <option value="BAIXA">Baixa</option>
-                </select>
-              </div>
+          <!-- BARRA DE FILTROS. Cada campo vira um parametro na URL da API,
+               e cada parametro vira uma condicao WHERE no banco. -->
+          <div class="toolbar">
+            <div class="field search-field">
+              <label for="f-busca">Buscar</label>
+              <input id="f-busca" type="search" placeholder="Título, descrição ou problema..." />
             </div>
+            <div class="field">
+              <label for="f-status">Status</label>
+              <select id="f-status">
+                <option value="">Todos</option>
+                <option value="ABERTO">Aberto</option>
+                <option value="EM_ANDAMENTO">Em andamento</option>
+                <option value="FINALIZADO">Finalizado</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="f-priority">Prioridade</label>
+              <select id="f-priority">
+                <option value="">Todas</option>
+                <option value="ALTA">Alta</option>
+                <option value="MEDIA">Média</option>
+                <option value="BAIXA">Baixa</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="f-categoria">Categoria</label>
+              <!-- preenchido pela API, igual ao formulario -->
+              <select id="f-categoria"><option value="">Todas</option></select>
+            </div>
+            <button class="btn btn--ghost btn--sm" id="btn-limpar" type="button">Limpar filtros</button>
           </div>
           <div class="panel__body panel__body--flush">
             <div id="tickets-table"><div class="state state--loading">Carregando...</div></div>
@@ -84,7 +106,19 @@
             </div>
             <div class="field">
               <label>Categoria *</label>
-              <input name="category" type="text" placeholder="Rede, Hardware, Software..." required />
+              <!-- As opcoes vem da API (/api/tickets/categories), nao estao
+                   escritas aqui. Uma fonte da verdade so: o enum do Python. -->
+              <select name="category" id="f-category-select" required>
+                <option value="">Selecione...</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Problema especifico</label>
+              <!-- Comeca desabilitado: so faz sentido depois de escolher a
+                   categoria. A lista e' trocada pelo JS a cada mudanca. -->
+              <select name="subcategory" id="f-subcategory-select" disabled>
+                <option value="">Escolha a categoria primeiro</option>
+              </select>
             </div>
             <div class="field">
               <label>Prioridade *</label>
@@ -114,8 +148,8 @@
       </div>
     </div>
 
-    <script src="js/api.js"></script>
-    <script src="js/ui.js"></script>
-    <script src="js/chamados.js"></script>
+    <script src="js/api.js?v=11"></script>
+    <script src="js/ui.js?v=11"></script>
+    <script src="js/chamados.js?v=11"></script>
   </body>
 </html>

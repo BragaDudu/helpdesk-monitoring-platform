@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import engine
 from backend.app.enums import TicketStatus
+from backend.app.enums import CATEGORY_LABELS
 from backend.app.models import Alert, Client, Equipment, EquipmentReading, Ticket
 from backend.app.schemas.analytics import (
     AverageResolutionTime,
@@ -33,6 +34,24 @@ from backend.app.schemas.analytics import (
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
+
+
+def _escopo(client_scope: int | None) -> list:
+    """Traduz o escopo do usuario em condicoes para as consultas de chamado.
+
+    ★ TODOS OS 7 RELATORIOS PASSAM POR AQUI.
+
+      Analytics e' o lugar mais perigoso do multi-empresa, porque uma
+      consulta agregada nao "parece" vazamento: ela nao mostra o chamado do
+      outro cliente, mostra um NUMERO. Mas esse numero conta quantos
+      chamados o concorrente abriu, qual o tempo de resposta dele e quem
+      sao os maiores clientes da operacao. Vazamento por agregacao e' um
+      vazamento de verdade.
+
+      Por isso a funcao existe: um lugar so, chamado por todos, facil de
+      auditar. Se um relatorio novo nascer sem chamar isto, fica evidente.
+    """
+    return [] if client_scope is None else [Ticket.client_id == client_scope]
 
 
 def _count_if(condition) -> object:
@@ -107,7 +126,7 @@ def _format_duration(hours: float | None) -> str:
 # ---------------------------------------------------------------------------
 # 1) QUANTIDADE DE CHAMADOS POR CLIENTE
 # ---------------------------------------------------------------------------
-def tickets_by_client(db: Session) -> list[TicketsByClientItem]:
+def tickets_by_client(db: Session, client_scope: int | None = None) -> list[TicketsByClientItem]:
     """Item 1 do Exercicio 2.
 
     SQL GERADO (aproximado):
@@ -152,6 +171,12 @@ def tickets_by_client(db: Session) -> list[TicketsByClientItem]:
         )
         .select_from(Client)
         .outerjoin(Ticket, Ticket.client_id == Client.id)
+        # ★ Aqui o filtro e' por Client.id, e nao por Ticket.client_id.
+        #   Motivo: este relatorio parte de CLIENTES (para nao perder quem
+        #   tem zero chamados). Filtrar pelo chamado eliminaria justamente o
+        #   cliente sem chamado -- que e' o caso que o LEFT JOIN existe para
+        #   preservar.
+        .where(*([] if client_scope is None else [Client.id == client_scope]))
         .group_by(Client.id, Client.name, Client.company)
         .order_by(func.count(Ticket.id).desc(), Client.name)
     )
@@ -173,7 +198,7 @@ def tickets_by_client(db: Session) -> list[TicketsByClientItem]:
 # ---------------------------------------------------------------------------
 # 2) QUANTIDADE DE CHAMADOS POR CATEGORIA
 # ---------------------------------------------------------------------------
-def tickets_by_category(db: Session) -> list[TicketsByCategoryItem]:
+def tickets_by_category(db: Session, client_scope: int | None = None) -> list[TicketsByCategoryItem]:
     """Item 2 do Exercicio 2.
 
     Aqui NAO ha JOIN: a categoria e' uma coluna da propria tabela tickets.
@@ -193,6 +218,7 @@ def tickets_by_category(db: Session) -> list[TicketsByCategoryItem]:
             _count_if(Ticket.status == TicketStatus.EM_ANDAMENTO).label("andamento"),
             _count_if(Ticket.status == TicketStatus.FINALIZADO).label("finalizados"),
         )
+        .where(*_escopo(client_scope))
         .group_by(Ticket.category)
         .order_by(func.count(Ticket.id).desc(), Ticket.category)
     )
@@ -200,6 +226,7 @@ def tickets_by_category(db: Session) -> list[TicketsByCategoryItem]:
     return [
         TicketsByCategoryItem(
             category=row.category,
+            category_label=CATEGORY_LABELS[row.category],
             total=row.total,
             abertos=int(row.abertos or 0),
             em_andamento=int(row.andamento or 0),
@@ -212,7 +239,7 @@ def tickets_by_category(db: Session) -> list[TicketsByCategoryItem]:
 # ---------------------------------------------------------------------------
 # 3) RANKING DOS CLIENTES COM MAIS CHAMADOS
 # ---------------------------------------------------------------------------
-def customer_ranking(db: Session, limit: int = 10) -> list[CustomerRankingItem]:
+def customer_ranking(db: Session, limit: int = 10, client_scope: int | None = None) -> list[CustomerRankingItem]:
     """Item 3 do Exercicio 2.
 
     DIFERENCA PARA O ITEM 1 (que tambem agrupa por cliente):
@@ -238,6 +265,7 @@ def customer_ranking(db: Session, limit: int = 10) -> list[CustomerRankingItem]:
         )
         .select_from(Client)
         .join(Ticket, Ticket.client_id == Client.id)
+        .where(*( [] if client_scope is None else [Client.id == client_scope] ))
         .group_by(Client.id, Client.name, Client.company)
         .order_by(func.count(Ticket.id).desc(), Client.name)
         .limit(limit)
@@ -258,7 +286,7 @@ def customer_ranking(db: Session, limit: int = 10) -> list[CustomerRankingItem]:
 # ---------------------------------------------------------------------------
 # 4) TEMPO MEDIO DE FECHAMENTO
 # ---------------------------------------------------------------------------
-def average_resolution_time(db: Session) -> AverageResolutionTime:
+def average_resolution_time(db: Session, client_scope: int | None = None) -> AverageResolutionTime:
     """Item 4 do Exercicio 2.
 
     ★ O FILTRO MAIS IMPORTANTE DESTA CONSULTA:
@@ -291,7 +319,7 @@ def average_resolution_time(db: Session) -> AverageResolutionTime:
     stmt = select(
         func.count(Ticket.id).label("total"),
         func.avg(_resolution_hours_expr()).label("avg_hours"),
-    ).where(condition)
+    ).where(condition, *_escopo(client_scope))
 
     row = db.execute(stmt).one()
     total = int(row.total or 0)
@@ -308,7 +336,7 @@ def average_resolution_time(db: Session) -> AverageResolutionTime:
 # ---------------------------------------------------------------------------
 # 5) CHAMADOS AINDA ABERTOS
 # ---------------------------------------------------------------------------
-def open_tickets(db: Session) -> OpenTicketsSummary:
+def open_tickets(db: Session, client_scope: int | None = None) -> OpenTicketsSummary:
     """Item 5 do Exercicio 2.
 
     Uma unica passada na tabela devolve a contagem dos tres status, de novo
@@ -325,12 +353,12 @@ def open_tickets(db: Session) -> OpenTicketsSummary:
             _count_if(Ticket.status == TicketStatus.ABERTO).label("abertos"),
             _count_if(Ticket.status == TicketStatus.EM_ANDAMENTO).label("andamento"),
             _count_if(Ticket.status == TicketStatus.FINALIZADO).label("finalizados"),
-        )
+        ).where(*_escopo(client_scope))
     ).one()
 
     priority_rows = db.execute(
         select(Ticket.priority, func.count(Ticket.id))
-        .where(Ticket.status != TicketStatus.FINALIZADO)
+        .where(Ticket.status != TicketStatus.FINALIZADO, *_escopo(client_scope))
         .group_by(Ticket.priority)
     ).all()
 
@@ -354,7 +382,7 @@ def open_tickets(db: Session) -> OpenTicketsSummary:
 # ---------------------------------------------------------------------------
 # 6) CATEGORIA COM MAIOR TEMPO MEDIO DE RESOLUCAO
 # ---------------------------------------------------------------------------
-def category_resolution_time(db: Session) -> list[CategoryResolutionTimeItem]:
+def category_resolution_time(db: Session, client_scope: int | None = None) -> list[CategoryResolutionTimeItem]:
     """Item 6 do Exercicio 2.
 
     Combina as duas ideias anteriores: agrupa por categoria (item 2) e
@@ -387,7 +415,8 @@ def category_resolution_time(db: Session) -> list[CategoryResolutionTimeItem]:
             and_(
                 Ticket.status == TicketStatus.FINALIZADO,
                 Ticket.closed_at.is_not(None),
-            )
+            ),
+            *_escopo(client_scope),
         )
         .group_by(Ticket.category)
         .order_by(func.avg(hours).desc())
@@ -399,6 +428,7 @@ def category_resolution_time(db: Session) -> list[CategoryResolutionTimeItem]:
         result.append(
             CategoryResolutionTimeItem(
                 category=row.category,
+                category_label=CATEGORY_LABELS[row.category],
                 total_finalizados=int(row.total),
                 average_hours=round(avg_hours, 2),
                 average_days=round(avg_hours / 24, 2),
@@ -411,7 +441,7 @@ def category_resolution_time(db: Session) -> list[CategoryResolutionTimeItem]:
 # ---------------------------------------------------------------------------
 # EXTRA) RESUMO PARA O DASHBOARD
 # ---------------------------------------------------------------------------
-def dashboard_summary(db: Session) -> DashboardSummary:
+def dashboard_summary(db: Session, client_scope: int | None = None) -> DashboardSummary:
     """Reune os numeros da tela inicial numa unica requisicao.
 
     QUEM CHAMA: o dashboard.js, ao abrir a pagina inicial.
@@ -429,22 +459,48 @@ def dashboard_summary(db: Session) -> DashboardSummary:
             _count_if(Ticket.status == TicketStatus.ABERTO).label("abertos"),
             _count_if(Ticket.status == TicketStatus.EM_ANDAMENTO).label("andamento"),
             _count_if(Ticket.status == TicketStatus.FINALIZADO).label("finalizados"),
-        )
+        ).where(*_escopo(client_scope))
     ).one()
 
-    total_clientes = db.scalar(select(func.count()).select_from(Client)) or 0
-    total_equipamentos = db.scalar(select(func.count()).select_from(Equipment)) or 0
-    total_leituras = db.scalar(select(func.count()).select_from(EquipmentReading)) or 0
-    total_alertas = db.scalar(select(func.count()).select_from(Alert)) or 0
+    # ★ CADA CONTADOR DO DASHBOARD TEM QUE RESPEITAR O ESCOPO.
+    #   Deixar UM sem filtro entregaria, por exemplo, "1.000 clientes" para
+    #   quem so pode ver a propria empresa -- revelando o tamanho da
+    #   carteira da operadora. Numero agregado tambem e' informacao.
+    escopo_cli = [] if client_scope is None else [Client.id == client_scope]
+    escopo_eqp = [] if client_scope is None else [Equipment.client_id == client_scope]
+
+    total_clientes = db.scalar(
+        select(func.count()).select_from(Client).where(*escopo_cli)
+    ) or 0
+    total_equipamentos = db.scalar(
+        select(func.count()).select_from(Equipment).where(*escopo_eqp)
+    ) or 0
+    # Leituras e alertas pertencem a um equipamento, entao o filtro passa
+    # por ele -- mesmo raciocinio do list_alerts.
+    total_leituras = db.scalar(
+        select(func.count())
+        .select_from(EquipmentReading)
+        .join(Equipment, EquipmentReading.equipment_id == Equipment.id)
+        .where(*escopo_eqp)
+    ) or 0
+    total_alertas = db.scalar(
+        select(func.count())
+        .select_from(Alert)
+        .join(Equipment, Alert.equipment_id == Equipment.id)
+        .where(*escopo_eqp)
+    ) or 0
     alertas_abertos = (
         db.scalar(
-            select(func.count()).select_from(Alert).where(Alert.status == "ABERTO")
+            select(func.count())
+            .select_from(Alert)
+            .join(Equipment, Alert.equipment_id == Equipment.id)
+            .where(Alert.status == "ABERTO", *escopo_eqp)
         )
         or 0
     )
 
-    categorias = tickets_by_category(db)
-    ranking = customer_ranking(db, limit=1)
+    categorias = tickets_by_category(db, client_scope=client_scope)
+    ranking = customer_ranking(db, limit=1, client_scope=client_scope)
 
     return DashboardSummary(
         total_clientes=total_clientes,
@@ -456,7 +512,7 @@ def dashboard_summary(db: Session) -> DashboardSummary:
         total_leituras=total_leituras,
         alertas_criticos_abertos=alertas_abertos,
         total_alertas=total_alertas,
-        tempo_medio_resolucao=average_resolution_time(db),
+        tempo_medio_resolucao=average_resolution_time(db, client_scope=client_scope),
         top_categoria=categorias[0].category if categorias else None,
         top_cliente=ranking[0].company if ranking else None,
     )

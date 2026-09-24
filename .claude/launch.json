@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sites-revosys",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8770", "--directory", "C:\\Users\\Gui\\Desktop\\Duzinho\\sites revosys"],
+      "port": 8770
+    },
+    {
+      "name": "revosys-todos-os-projetos",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:\\Users\\Gui\\Desktop\\Duzinho\\sites revosys\\servir_projetos.py"],
+      "port": 8771
+    }
+  ]
+}

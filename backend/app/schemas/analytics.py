@@ -9,6 +9,7 @@ solto, mas ai o Swagger nao documentaria nada e o frontend teria que
 adivinhar os nomes dos campos. O schema E' a documentacao.
 """
 
+from backend.app.enums import TicketCategory
 from pydantic import BaseModel
 
 
@@ -27,7 +28,8 @@ class TicketsByClientItem(BaseModel):
 class TicketsByCategoryItem(BaseModel):
     """Item 2 do Exercicio 2: quantidade de chamados por categoria."""
 
-    category: str
+    category: TicketCategory
+    category_label: str
     total: int
     abertos: int
     em_andamento: int
@@ -88,7 +90,8 @@ class CategoryResolutionTimeItem(BaseModel):
     ja e' a resposta da pergunta do enunciado.
     """
 
-    category: str
+    category: TicketCategory
+    category_label: str
     total_finalizados: int
     average_hours: float
     average_days: float

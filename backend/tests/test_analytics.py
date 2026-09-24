@@ -19,11 +19,11 @@ def _seed_conhecido():
     base = datetime(2026, 1, 1, 8, 0, 0)
     # (cliente, categoria, status, horas)  -> finalizados: 2h, 4h, 6h  (media 4h)
     dados = [
-        (c1, "Rede", "FINALIZADO", 2),
-        (c1, "Rede", "FINALIZADO", 4),
-        (c1, "Hardware", "FINALIZADO", 6),
-        (c1, "Rede", "ABERTO", None),
-        (c2, "Rede", "ABERTO", None),
+        (c1, "REDE", "FINALIZADO", 2),
+        (c1, "REDE", "FINALIZADO", 4),
+        (c1, "HARDWARE", "FINALIZADO", 6),
+        (c1, "REDE", "ABERTO", None),
+        (c2, "REDE", "ABERTO", None),
     ]
     for i, (c, cat, st, h) in enumerate(dados):
         op = base + timedelta(days=i)
@@ -63,7 +63,7 @@ def test_categoria_mais_demorada_primeiro(client):
     """(6) Hardware (6h) demora mais que Rede (media 3h) -> vem primeiro."""
     _seed_conhecido()
     rows = client.get("/api/analytics/category-resolution-time").json()
-    assert rows[0]["category"] == "Hardware"
+    assert rows[0]["category"] == "HARDWARE"
 
 
 def test_ranking(client):

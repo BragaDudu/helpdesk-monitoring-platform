@@ -89,3 +89,104 @@ class ErrorResponse(BaseModel):
             }
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# PAGINACAO -- o envelope que acompanha toda listagem
+# ---------------------------------------------------------------------------
+# ★ POR QUE A LISTAGEM DEIXOU DE DEVOLVER UMA LISTA CRUA
+#
+#   Antes, GET /api/tickets devolvia [ {...}, {...} ]. Com 5.000 chamados
+#   isso tem dois problemas:
+#
+#     1. Sem limite, seriam 5.000 objetos numa resposta so -- megabytes de
+#        JSON que o navegador tem que baixar e desenhar. A tela trava.
+#     2. COM limite, a lista crua nao diz quantos existem no total. O
+#        frontend recebe 20 itens e nao tem como saber se sao 20 ou 5.000 --
+#        e sem isso e' impossivel desenhar "pagina 3 de 250".
+#
+#   O envelope resolve os dois: entrega a fatia (items) e o tamanho do bolo
+#   (total). E' o padrao de qualquer API que lida com volume.
+#
+# CUSTO HONESTO: o `total` exige um segundo SELECT COUNT(*) com os mesmos
+# filtros. E' uma consulta a mais por listagem. Vale a pena porque sem ela
+# nao existe paginacao de verdade -- e o COUNT usa os mesmos indices do
+# WHERE, entao e' barato.
+# ---------------------------------------------------------------------------
+from typing import Generic, TypeVar  # noqa: E402
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """Uma fatia de uma lista, com o contexto para navegar entre fatias."""
+
+    items: list[T]
+    total: int      # quantos registros existem COM ESTES FILTROS
+    limit: int      # tamanho da fatia pedida
+    offset: int     # quantos foram pulados
+    has_more: bool  # ainda ha pagina depois desta?
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "items": [],
+                "total": 5000,
+                "limit": 20,
+                "offset": 40,
+                "has_more": True,
+            }
+        }
+    }
+
+
+def montar_pagina(items: list, total: int, limit: int, offset: int) -> dict:
+    """Monta o envelope. Existe para os routers nao repetirem a conta.
+
+    has_more e' CALCULADO no backend de proposito: se cada frontend tivesse
+    que fazer `offset + len(items) < total` na mao, um deles erraria o sinal
+    e o botao "proxima" apareceria na ultima pagina.
+    """
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }
+
+
+# ---------------------------------------------------------------------------
+# ORDENACAO
+# ---------------------------------------------------------------------------
+# ★ POR QUE EXISTE UMA "LISTA BRANCA" DE COLUNAS PERMITIDAS
+#
+#   A tentacao e' pegar o nome da coluna direto da URL e jogar no ORDER BY:
+#
+#       stmt.order_by(text(request.query_params["sort"]))   # NAO FACA ISSO
+#
+#   Isso e' SQL Injection pela porta dos fundos. Parametro do SQLAlchemy
+#   protege VALORES (o "?" que voce ve no log), mas nome de coluna nao e'
+#   valor -- ele entra na estrutura da consulta. Alguem mandaria
+#   ?sort=(SELECT password_hash FROM users LIMIT 1) e o banco obedeceria.
+#
+#   Com a lista branca, o texto da URL nunca vira SQL: ele e' apenas a
+#   CHAVE de um dicionario que ja contem as colunas reais. O que nao esta
+#   no dicionario simplesmente nao existe.
+# ---------------------------------------------------------------------------
+def aplicar_ordenacao(stmt, sort: str | None, order: str | None, permitidas: dict, padrao):
+    """Acrescenta ORDER BY a consulta, aceitando so colunas conhecidas.
+
+    RECEBE:
+        sort       -- nome vindo da URL (ex.: "company")
+        order      -- "asc" ou "desc"
+        permitidas -- {"company": Client.company, ...}
+        padrao     -- lista de colunas usada quando nao pediram nada
+
+    RETORNA: a consulta com o ORDER BY aplicado.
+    """
+    coluna = permitidas.get(sort or "")
+    if coluna is None:
+        return stmt.order_by(*padrao)
+
+    return stmt.order_by(coluna.desc() if order == "desc" else coluna.asc())

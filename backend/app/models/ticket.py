@@ -18,7 +18,7 @@ from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.database import Base
-from backend.app.enums import TicketPriority, TicketStatus
+from backend.app.enums import TicketCategory, TicketPriority, TicketStatus
 from backend.app.utils import utcnow
 
 if TYPE_CHECKING:
@@ -59,11 +59,33 @@ class Ticket(Base):
     # Text (e nao String(n)) porque descricao nao tem tamanho previsivel.
     description: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # Categoria e' texto indexado, e nao Enum, DE PROPOSITO: a empresa pode
-    # criar categorias novas ("Backup", "Impressora") sem alterar o codigo.
-    # Status e prioridade, ao contrario, sao o ciclo de vida do sistema --
-    # esses SIM precisam ser fechados.
-    category: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # -----------------------------------------------------------------------
+    # ★ CATEGORIA -- era String(40) livre, virou Enum. POR QUE MUDOU:
+    #
+    #   Esta coluna alimenta DOIS relatorios (chamados por categoria e tempo
+    #   medio por categoria), e os dois fazem GROUP BY nela. Com texto livre,
+    #   "Rede", "rede" e "Rede " virariam tres grupos e o grafico mentiria.
+    #
+    #   O argumento antigo era "a empresa pode criar categoria nova sem
+    #   mexer no codigo". Na pratica isso nunca aconteceu, e o preco era um
+    #   relatorio que ninguem pode auditar. Se um dia categorias precisarem
+    #   mesmo ser editaveis pelo usuario, o certo e' uma TABELA de
+    #   categorias com FK -- nao texto solto.
+    # -----------------------------------------------------------------------
+    category: Mapped[TicketCategory] = mapped_column(
+        SAEnum(TicketCategory, native_enum=False, create_constraint=True, length=20, name="ticket_category_enum"),
+        nullable=False,
+        index=True,
+    )
+
+    # Subcategoria: o problema especifico dentro da categoria.
+    # Fica NULL quando o chamado nao detalha -- por isso e' Optional. A
+    # combinacao valida (subcategoria pertence a categoria?) e' checada no
+    # schema, porque depende de DUAS colunas ao mesmo tempo; uma CHECK
+    # constraint por coluna nao consegue expressar isso de forma legivel.
+    subcategory: Mapped[Optional[str]] = mapped_column(
+        String(60), nullable=True, index=True
+    )
 
     # -----------------------------------------------------------------------
     # SAEnum com native_enum=False:

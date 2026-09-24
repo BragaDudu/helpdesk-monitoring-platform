@@ -77,6 +77,27 @@ class Settings(BaseSettings):
     # Se True, o SQLAlchemy imprime no terminal cada SQL executado.
     SQL_ECHO: bool = False
 
+    # -----------------------------------------------------------------------
+    # ★ CHAVE DE ASSINATURA DOS TOKENS
+    #
+    #   E' com ela que o servidor assina o cracha de login e confere se um
+    #   token e' legitimo. Quem tem esta chave consegue FABRICAR um token de
+    #   super administrador -- ou seja, ela vale tanto quanto todas as senhas
+    #   juntas.
+    #
+    #   POR ISSO ela mora no .env (que esta no .gitignore) e NAO no codigo.
+    #   O valor padrao abaixo serve so para o projeto subir na primeira vez.
+    #
+    #   TROCAR A CHAVE derruba todos os tokens emitidos -- todo mundo precisa
+    #   entrar de novo. E' exatamente o que se quer num vazamento.
+    # -----------------------------------------------------------------------
+    SECRET_KEY: str = "troque-esta-chave-em-producao-com-um-valor-aleatorio-longo"
+
+    # Quanto tempo o login dura antes de pedir senha de novo.
+    # 480 min = 8 horas = um turno de trabalho. Curto demais irrita o
+    # usuario; longo demais deixa um token roubado util por semanas.
+    TOKEN_EXPIRE_MINUTES: int = 480
+
     @property
     def DATABASE_URL_RESOLVED(self) -> str:
         """A URL de conexao que sera realmente usada.

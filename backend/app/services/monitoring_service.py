@@ -34,13 +34,14 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.app.config import settings
 from backend.app.enums import AlertStatus, AlertType, EquipmentStatus
-from backend.app.exceptions import ConflictError, NotFoundError
+from backend.app.exceptions import ConflictError, ForbiddenError, NotFoundError
 from backend.app.models import Alert, Client, Equipment, EquipmentReading
 from backend.app.schemas.equipment import (
     AnomalyItem,
     EquipmentCreate,
     ReadingCreate,
 )
+from backend.app.schemas.common import aplicar_ordenacao
 from backend.app.services.client_service import get_client
 from backend.app.utils import utcnow
 
@@ -49,14 +50,18 @@ from backend.app.utils import utcnow
 # ===========================================================================
 
 
-def create_equipment(db: Session, payload: EquipmentCreate) -> Equipment:
+def create_equipment(
+    db: Session, payload: EquipmentCreate, client_scope: int | None = None
+) -> Equipment:
     """Cadastra um equipamento vinculado a um cliente.
 
     ERROS:
         404 -> o cliente informado nao existe
         409 -> ja existe equipamento com essa identificacao (coluna UNIQUE)
     """
-    get_client(db, payload.client_id)
+    # Escopo tambem na escrita: nao da' para cadastrar equipamento em
+    # nome de outra empresa.
+    get_client(db, payload.client_id, client_scope)
 
     equipment = Equipment(
         client_id=payload.client_id,
@@ -145,9 +150,14 @@ def list_equipments(
     db: Session,
     client_id: int | None = None,
     status: str | None = None,
+    search: str | None = None,
     limit: int = 200,
     offset: int = 0,
-) -> list[dict]:
+    com_total: bool = False,
+    client_scope: int | None = None,
+    sort: str | None = None,
+    order: str | None = None,
+):
     """Lista equipamentos JA COM a temperatura atual e os alertas abertos.
 
     UMA consulta traz tudo: equipamento + cliente (JOIN) + ultima leitura
@@ -165,19 +175,70 @@ def list_equipments(
         .outerjoin(EquipmentReading, EquipmentReading.id == last_reading_id)
     )
 
+    # Condicoes montadas uma vez: a lista e a contagem tem que concordar.
+    condicoes = []
+
+    # ★ Filtro de empresa em primeiro lugar, sempre.
+    if client_scope is not None:
+        condicoes.append(Equipment.client_id == client_scope)
+
     if client_id is not None:
-        stmt = stmt.where(Equipment.client_id == client_id)
+        condicoes.append(Equipment.client_id == client_id)
     if status:
-        stmt = stmt.where(Equipment.status == status)
+        condicoes.append(Equipment.status == status)
+    if search and search.strip():
+        termo = f"%{search.strip()}%"
+        # ★ A BUSCA ALCANCA A TABELA DE CLIENTES TAMBEM.
+        #
+        #   Quem opera o sistema pensa por EMPRESA ("cade os equipamentos
+        #   da Alfa?"), nao por codigo de patrimonio. Procurar so por
+        #   identificador obrigava o usuario a saber o EQP-0007 de cor.
+        #
+        #   Isto so funciona porque a consulta ja faz joinedload do cliente:
+        #   a tabela clients ja esta no JOIN, entao filtrar por ela nao
+        #   custa consulta nenhuma a mais.
+        condicoes.append(
+            Equipment.identifier.ilike(termo)
+            | Equipment.name.ilike(termo)
+            | Equipment.location.ilike(termo)
+            | Client.company.ilike(termo)
+            | Client.name.ilike(termo)
+        )
 
-    stmt = stmt.order_by(Equipment.identifier).limit(limit).offset(offset)
-    return _rows_to_equipment_out(db.execute(stmt).all())
+    stmt = stmt.join(Client, Equipment.client_id == Client.id).where(*condicoes)
+    stmt = aplicar_ordenacao(
+        stmt, sort, order,
+        {"identifier": Equipment.identifier, "name": Equipment.name,
+         "company": Client.company, "location": Equipment.location,
+         "status": Equipment.status},
+        padrao=[Client.company, Equipment.identifier],
+    )
+    stmt = stmt.limit(limit).offset(offset)
+    itens = _rows_to_equipment_out(db.execute(stmt).all())
+
+    # com_total=False mantem a assinatura antiga (devolve so a lista), para
+    # nao quebrar quem ja chamava esta funcao -- o seed e a deteccao de
+    # anomalias iteram sobre ela. Quem precisa paginar pede o total.
+    if not com_total:
+        return itens
+
+    # O COUNT repete o JOIN porque as condicoes podem citar clients.
+    total = db.scalar(
+        select(func.count())
+        .select_from(Equipment)
+        .join(Client, Equipment.client_id == Client.id)
+        .where(*condicoes)
+    ) or 0
+    return itens, total
 
 
-def get_equipment(db: Session, equipment_id: int) -> dict:
+def get_equipment(
+    db: Session, equipment_id: int, client_scope: int | None = None
+) -> dict:
     """Busca UM equipamento com temperatura atual e alertas abertos.
 
-    ERRO: NotFoundError -> HTTP 404
+    ERROS: NotFoundError -> 404 | ForbiddenError -> 403 (equipamento de
+    outra empresa; ver a explicacao de IDOR no client_service)
     """
     last_reading_id, open_alerts_count = _last_reading_subqueries()
 
@@ -190,11 +251,18 @@ def get_equipment(db: Session, equipment_id: int) -> dict:
     rows = db.execute(stmt).all()
     if not rows:
         raise NotFoundError("Equipamento", equipment_id)
-    return _rows_to_equipment_out(rows)[0]
+
+    resultado = _rows_to_equipment_out(rows)[0]
+    if client_scope is not None and resultado["client_id"] != client_scope:
+        raise ForbiddenError("Voce nao tem acesso a este equipamento.")
+    return resultado
 
 
 def change_equipment_status(
-    db: Session, equipment_id: int, new_status: EquipmentStatus
+    db: Session,
+    equipment_id: int,
+    new_status: EquipmentStatus,
+    client_scope: int | None = None,
 ) -> dict:
     """Altera o estado operacional do equipamento.
 
@@ -209,10 +277,12 @@ def change_equipment_status(
     equipment = db.get(Equipment, equipment_id)
     if equipment is None:
         raise NotFoundError("Equipamento", equipment_id)
+    if client_scope is not None and equipment.client_id != client_scope:
+        raise ForbiddenError("Voce nao tem acesso a este equipamento.")
 
     equipment.status = new_status
     db.commit()
-    return get_equipment(db, equipment_id)
+    return get_equipment(db, equipment_id, client_scope)
 
 
 # ===========================================================================
@@ -221,7 +291,10 @@ def change_equipment_status(
 
 
 def register_reading(
-    db: Session, equipment_id: int, payload: ReadingCreate
+    db: Session,
+    equipment_id: int,
+    payload: ReadingCreate,
+    client_scope: int | None = None,
 ) -> dict:
     """Registra uma leitura e, se necessario, gera um alerta critico.
 
@@ -281,6 +354,10 @@ def register_reading(
     equipment = db.get(Equipment, equipment_id)
     if equipment is None:
         raise NotFoundError("Equipamento", equipment_id)
+    # Enviar leitura para equipamento de outra empresa e' 403: seria
+    # possivel disparar alertas falsos no painel do concorrente.
+    if client_scope is not None and equipment.client_id != client_scope:
+        raise ForbiddenError("Voce nao tem acesso a este equipamento.")
 
     # ---- passo 3: monta a leitura ---------------------------------------
     reading = EquipmentReading(
@@ -354,7 +431,11 @@ def register_reading(
 
 
 def list_readings(
-    db: Session, equipment_id: int, limit: int = 100, offset: int = 0
+    db: Session,
+    equipment_id: int,
+    limit: int = 100,
+    offset: int = 0,
+    client_scope: int | None = None,
 ) -> list[EquipmentReading]:
     """Historico de leituras de um equipamento, da mais recente para a mais
     antiga (item 4 do Exercicio 3).
@@ -381,7 +462,10 @@ def list_alerts(
     status: str | None = None,
     limit: int = 200,
     offset: int = 0,
-) -> list[dict]:
+    client_scope: int | None = None,
+    sort: str | None = None,
+    order: str | None = None,
+) -> tuple[list[dict], int]:
     """Lista alertas com os dados do equipamento e do cliente ja embutidos.
 
     Faz JOIN com equipments e clients para a tela de alertas mostrar
@@ -393,12 +477,40 @@ def list_alerts(
         .join(Client, Equipment.client_id == Client.id)
     )
 
-    if equipment_id is not None:
-        stmt = stmt.where(Alert.equipment_id == equipment_id)
-    if status:
-        stmt = stmt.where(Alert.status == status)
+    condicoes = []
 
-    stmt = stmt.order_by(Alert.created_at.desc(), Alert.id.desc())
+    # ★ ALERTA NAO TEM client_id PROPRIO -- ele pertence a um EQUIPAMENTO,
+    #   e o equipamento e' que pertence a uma empresa. Por isso o filtro
+    #   passa pelo equipamento. E' o mesmo JOIN que a consulta ja faz para
+    #   trazer o nome da empresa, entao nao custa consulta extra.
+    if client_scope is not None:
+        condicoes.append(Equipment.client_id == client_scope)
+
+    if equipment_id is not None:
+        condicoes.append(Alert.equipment_id == equipment_id)
+    if status:
+        condicoes.append(Alert.status == status)
+
+    # ★ O COUNT PRECISA DO MESMO JOIN.
+    #   Sem o join com Equipment, a condicao Equipment.client_id viraria um
+    #   produto cartesiano e o total sairia errado (maior que a lista).
+    total_alertas = db.scalar(
+        select(func.count())
+        .select_from(Alert)
+        .join(Equipment, Alert.equipment_id == Equipment.id)
+        .where(*condicoes)
+    ) or 0
+
+    stmt = stmt.where(*condicoes)
+    stmt = aplicar_ordenacao(
+        stmt, sort, order,
+        {"id": Alert.id, "identifier": Equipment.identifier,
+         "company": Client.company, "temperature": Alert.temperature,
+         "status": Alert.status, "created_at": Alert.created_at},
+        # Padrao: mais recente primeiro. Num painel de alerta, o que
+        # aconteceu agora importa mais que o de ontem.
+        padrao=[Alert.created_at.desc(), Alert.id.desc()],
+    )
     stmt = stmt.limit(limit).offset(offset)
 
     result = []
@@ -418,17 +530,24 @@ def list_alerts(
                 "client_company": client.company,
             }
         )
-    return result
+    return result, total_alertas
 
 
-def list_equipment_alerts(db: Session, equipment_id: int, **filters) -> list[dict]:
-    """Alertas de UM equipamento. 404 se o equipamento nao existir."""
-    get_equipment(db, equipment_id)
-    return list_alerts(db, equipment_id=equipment_id, **filters)
+def list_equipment_alerts(
+    db: Session, equipment_id: int, client_scope: int | None = None, **filters
+) -> tuple[list[dict], int]:
+    """Alertas de UM equipamento. 404 se nao existir, 403 se for de outra empresa."""
+    get_equipment(db, equipment_id, client_scope)
+    return list_alerts(
+        db, equipment_id=equipment_id, client_scope=client_scope, **filters
+    )
 
 
 def change_alert_status(
-    db: Session, alert_id: int, new_status: AlertStatus
+    db: Session,
+    alert_id: int,
+    new_status: AlertStatus,
+    client_scope: int | None = None,
 ) -> dict:
     """Marca um alerta como RECONHECIDO ou RESOLVIDO.
 
@@ -441,10 +560,18 @@ def change_alert_status(
     if alert is None:
         raise NotFoundError("Alerta", alert_id)
 
+    # O alerta nao guarda o dono: quem guarda e' o equipamento dele.
+    # get_equipment ja faz a checagem de escopo e levanta 403.
+    get_equipment(db, alert.equipment_id, client_scope)
+
     alert.status = new_status
     db.commit()
 
-    found = list_alerts(db, equipment_id=alert.equipment_id)
+    # list_alerts agora devolve (itens, total) por causa da paginacao.
+    # Descartamos o total aqui: queremos UM alerta, nao uma pagina.
+    found, _ = list_alerts(
+        db, equipment_id=alert.equipment_id, limit=1000, client_scope=client_scope
+    )
     return next(item for item in found if item["id"] == alert_id)
 
 
@@ -453,7 +580,9 @@ def change_alert_status(
 # ===========================================================================
 
 
-def detect_anomalies(db: Session) -> list[AnomalyItem]:
+def detect_anomalies(
+    db: Session, client_scope: int | None = None
+) -> list[AnomalyItem]:
     """Varre os equipamentos e aponta tudo que esta fora do normal.
 
     ★ POR QUE ISSO E' DIFERENTE DO ALERTA DE 80 GRAUS?
@@ -494,7 +623,9 @@ def detect_anomalies(db: Session) -> list[AnomalyItem]:
 
     anomalies: list[AnomalyItem] = []
 
-    for eq in list_equipments(db):
+    # A varredura respeita o escopo: o responsavel da empresa 3 nao pode
+    # ver que o servidor da empresa 7 esta fora do ar.
+    for eq in list_equipments(db, client_scope=client_scope, limit=10000):
         common = {
             "equipment_id": eq["id"],
             "identifier": eq["identifier"],

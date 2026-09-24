@@ -78,3 +78,36 @@ class BusinessRuleError(DomainError):
 
     status_code = 409
     error_code = "business_rule_violation"
+
+
+class UnauthorizedError(DomainError):
+    """Nao sabemos quem e' voce.  ->  HTTP 401 Unauthorized
+
+    Token ausente, mal formado, expirado, adulterado, ou de um usuario que
+    foi desativado. TODOS devolvem a mesma mensagem generica.
+
+    ★ POR QUE A MENSAGEM E' SEMPRE IGUAL: se dissesse "usuario nao existe"
+      num caso e "senha incorreta" no outro, um atacante descobriria quais
+      e-mails estao cadastrados so testando o formulario de login. Isso se
+      chama "user enumeration" e e' o vazamento mais comum em tela de login.
+
+    NOME CONFUSO DO PADRAO HTTP: 401 se chama "Unauthorized", mas significa
+    NAO AUTENTICADO. Quem esta autenticado e nao tem permissao leva 403.
+    """
+
+    status_code = 401
+    error_code = "unauthorized"
+
+
+class ForbiddenError(DomainError):
+    """Sabemos quem e' voce, e voce nao pode.  ->  HTTP 403 Forbidden
+
+    Diferente do 401: fazer login de novo NAO resolve. O papel do usuario
+    simplesmente nao permite aquela acao.
+
+    Usado quando um ADMIN_EMPRESA tenta cadastrar cliente, ou tenta acessar
+    um recurso de outra empresa.
+    """
+
+    status_code = 403
+    error_code = "forbidden"

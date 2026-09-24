@@ -18,5 +18,6 @@ from backend.app.models.client import Client
 from backend.app.models.equipment import Equipment
 from backend.app.models.reading import EquipmentReading
 from backend.app.models.ticket import Ticket
+from backend.app.models.user import User
 
-__all__ = ["Alert", "Client", "Equipment", "EquipmentReading", "Ticket"]
+__all__ = ["Alert", "Client", "Equipment", "EquipmentReading", "Ticket", "User"]

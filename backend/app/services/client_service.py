@@ -14,9 +14,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.app.exceptions import ConflictError, NotFoundError
+from backend.app.exceptions import ConflictError, ForbiddenError, NotFoundError
 from backend.app.models import Client, Equipment, Ticket
 from backend.app.schemas.client import ClientCreate, ClientUpdate
+from backend.app.schemas.common import aplicar_ordenacao
 
 
 def create_client(db: Session, payload: ClientCreate) -> Client:
@@ -66,8 +67,14 @@ def create_client(db: Session, payload: ClientCreate) -> Client:
 
 
 def list_clients(
-    db: Session, search: str | None = None, limit: int = 100, offset: int = 0
-) -> list[Client]:
+    db: Session,
+    search: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    client_scope: int | None = None,
+    sort: str | None = None,
+    order: str | None = None,
+) -> tuple[list[Client], int]:
     """Lista clientes, opcionalmente filtrando por texto.
 
     O FILTRO E' FEITO NO BANCO (WHERE ... LIKE), nao em Python.
@@ -81,21 +88,47 @@ def list_clients(
     isso e' tratado como TEXTO a procurar, nao como comando. SQL Injection
     e' impossivel por construcao.
     """
-    stmt = select(Client)
+    # Mesma condicao para a lista e para a contagem -- ver o comentario
+    # equivalente no ticket_service: se divergirem, o rodape mente.
+    condicoes = []
 
-    if search:
+    # ★ O FILTRO DO MULTI-EMPRESA VEM PRIMEIRO, ANTES DE QUALQUER OUTRO.
+    #   client_scope=None  -> sem restricao (usuario da empresa de TI)
+    #   client_scope=3     -> a listagem inteira vira "so o cliente 3"
+    #
+    #   Colocado como PRIMEIRA condicao de proposito: assim ele nunca fica
+    #   dentro de um "if" de outro filtro e nunca deixa de ser aplicado.
+    if client_scope is not None:
+        condicoes.append(Client.id == client_scope)
+
+    if search and search.strip():
         term = f"%{search.strip()}%"
-        stmt = stmt.where(
+        condicoes.append(
             Client.name.ilike(term)
             | Client.company.ilike(term)
             | Client.email.ilike(term)
         )
 
-    stmt = stmt.order_by(Client.name).limit(limit).offset(offset)
-    return list(db.execute(stmt).scalars().all())
+    total = db.scalar(
+        select(func.count()).select_from(Client).where(*condicoes)
+    ) or 0
+
+    stmt = select(Client).where(*condicoes)
+    stmt = aplicar_ordenacao(
+        stmt, sort, order,
+        # As colunas que a tela pode ordenar. Nome vindo da URL a esquerda,
+        # coluna real a direita -- e nada fora daqui chega ao SQL.
+        {"id": Client.id, "name": Client.name, "company": Client.company,
+         "email": Client.email, "created_at": Client.created_at},
+        padrao=[Client.company, Client.name],
+    )
+    stmt = stmt.limit(limit).offset(offset)
+    return list(db.execute(stmt).scalars().all()), total
 
 
-def get_client(db: Session, client_id: int) -> Client:
+def get_client(
+    db: Session, client_id: int, client_scope: int | None = None
+) -> Client:
     """Busca UM cliente pelo id, ou levanta NotFoundError.
 
     QUEM CHAMA: o router de clientes, o router de chamados (para validar que
@@ -107,6 +140,16 @@ def get_client(db: Session, client_id: int) -> Client:
     client = db.get(Client, client_id)  # SELECT ... WHERE id = ? (usa a PK)
     if client is None:
         raise NotFoundError("Cliente", client_id)
+
+    # ★ CHECAGEM DE DONO: o cliente existe, mas e' DESTE usuario?
+    #
+    #   Sem isto, um ADMIN_EMPRESA da empresa 3 acessaria /api/clients/7
+    #   trocando o numero na URL e leria os dados da empresa 7. Essa falha
+    #   tem nome -- IDOR, "referencia direta insegura a objeto" -- e e' uma
+    #   das mais comuns em API. Filtrar so a LISTAGEM nao basta: quem sabe
+    #   o id acessa direto.
+    if client_scope is not None and client.id != client_scope:
+        raise ForbiddenError("Voce nao tem acesso aos dados deste cliente.")
     return client
 
 

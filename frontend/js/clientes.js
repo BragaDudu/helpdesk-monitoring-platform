@@ -15,23 +15,29 @@ let searchTerm = "";
  * loadClients -- busca os clientes e desenha a tabela.
  * Chamada ao abrir a pagina, apos criar/excluir, e ao buscar.
  */
-async function loadClients() {
+async function loadClients(offset = 0) {
   const box = document.getElementById("clients-table");
   showLoading(box);
 
   try {
-    // Monta a querystring de busca (encodeURIComponent protege caracteres
-    // especiais e evita quebrar a URL).
-    const q = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : "";
-    const clients = await api.get(`/clients${q}`);
+    // Monta a querystring (encodeURIComponent protege caracteres especiais
+    // e evita quebrar a URL).
+    const params = new URLSearchParams();
+    if (searchTerm) params.set("search", searchTerm);
+    params.set("limit", TAMANHO_PAGINA);
+    params.set("offset", offset);
+    paramsDeOrdem("clientes", params);
 
-    if (!clients.length) {
-      return showEmpty(box, "Nenhum cliente encontrado.");
+    const pagina = await api.get(`/clients?${params.toString()}`);
+
+    if (!pagina.items.length) {
+      box.innerHTML = estadoVazio(Boolean(searchTerm), "cliente");
+      return;
     }
 
     // Monta as linhas. TODO texto vindo do banco passa por escapeHtml
     // (protecao contra XSS -- ver ui.js).
-    const rows = clients
+    const rows = pagina.items
       .map(
         (c) => `
         <tr>
@@ -52,11 +58,13 @@ async function loadClients() {
 
     box.innerHTML = `
       <table>
-        <thead>
-          <tr><th>ID</th><th>Nome</th><th>Empresa</th><th>E-mail</th><th>Telefone</th><th></th></tr>
-        </thead>
+        ${cabecalho("clientes", [
+          ["ID", "id"], ["Nome", "name"], ["Empresa", "company"],
+          ["E-mail", "email"], ["Telefone", null], [null, null],
+        ], "loadClients")}
         <tbody>${rows}</tbody>
-      </table>`;
+      </table>
+      ${paginador(pagina, "loadClients")}`;
   } catch (error) {
     showErrorState(box, error.detail || error.message);
   }
@@ -103,10 +111,19 @@ async function showDetail(clientId) {
   try {
     // Promise.all dispara as duas requisicoes EM PARALELO e espera as duas.
     // Mais rapido do que uma depois da outra.
-    const [client, tickets] = await Promise.all([
+    const [client, paginaChamados] = await Promise.all([
       api.get(`/clients/${clientId}`),
-      api.get(`/clients/${clientId}/tickets`),
+      // Este endpoint tambem e' paginado. Pedimos as 10 mais recentes: o
+      // modal e' um RESUMO, nao a tela de chamados. Quem quiser a lista
+      // completa vai para Chamados e filtra por este cliente.
+      api.get(`/clients/${clientId}/tickets?limit=10`),
     ]);
+
+    // O envelope traz {items, total}. 'items' sao os 10 mostrados aqui;
+    // 'total' e' quantos o cliente tem no TOTAL -- os dois numeros sao
+    // diferentes de proposito e ambos aparecem na tela.
+    const tickets = paginaChamados.items;
+    const totalChamados = paginaChamados.total;
 
     document.getElementById("detail-title").textContent = client.company;
 
@@ -132,7 +149,19 @@ async function showDetail(clientId) {
         <div class="detail-row"><dt>Telefone</dt><dd>${escapeHtml(client.phone)}</dd></div>
         <div class="detail-row"><dt>Cadastrado em</dt><dd>${formatDate(client.created_at)}</dd></div>
       </dl>
-      <h3 style="margin:20px 0 10px;font-size:15px">Chamados (${tickets.length})</h3>
+      <h3 style="margin:20px 0 10px;font-size:15px">
+        Chamados (${totalChamados})
+        ${totalChamados > tickets.length
+          ? `<span class="muted" style="font-weight:400;font-size:13px">— mostrando os ${tickets.length} mais recentes</span>`
+          : ""}
+      </h3>
+      ${totalChamados > tickets.length
+        ? `<p style="margin:0 0 12px">
+             <a class="link-btn" href="chamados.html?client_id=${clientId}">
+               Ver todos os ${totalChamados} chamados desta empresa →
+             </a>
+           </p>`
+        : ""}
       <table>
         <thead><tr><th>Título</th><th>Prioridade</th><th>Status</th><th>Abertura</th></tr></thead>
         <tbody>${ticketsHtml}</tbody>
@@ -170,10 +199,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Busca com "debounce": espera 300ms apos parar de digitar antes de
   // chamar a API. Evita uma requisicao por tecla.
-  let timer;
-  document.getElementById("search").addEventListener("input", (e) => {
-    clearTimeout(timer);
-    searchTerm = e.target.value.trim();
-    timer = setTimeout(loadClients, 300);
-  });
+  document.getElementById("search").addEventListener(
+    "input",
+    debounce((e) => {
+      searchTerm = e.target.value.trim();
+      // offset 0: toda nova busca comeca da primeira pagina.
+      loadClients(0);
+    }, 350)
+  );
 });

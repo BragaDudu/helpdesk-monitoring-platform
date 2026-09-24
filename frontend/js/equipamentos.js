@@ -15,18 +15,28 @@ function tempClass(temp) {
   return "temp--ok";
 }
 
-async function loadEquipments() {
+async function loadEquipments(offset = 0) {
   const box = document.getElementById("equip-table");
   showLoading(box);
 
   const status = document.getElementById("f-eq-status").value;
-  const qs = status ? `?status=${status}` : "";
+  const busca = document.getElementById("f-eq-busca")?.value || "";
+
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (busca.trim()) params.set("search", busca.trim());
+  params.set("limit", TAMANHO_PAGINA);
+  params.set("offset", offset);
+  paramsDeOrdem("equipamentos", params);
 
   try {
-    const list = await api.get(`/equipments${qs}`);
-    if (!list.length) return showEmpty(box, "Nenhum equipamento encontrado.");
+    const pagina = await api.get(`/equipments?${params.toString()}`);
+    if (!pagina.items.length) {
+      box.innerHTML = estadoVazio(Boolean(status || busca.trim()), "equipamento");
+      return;
+    }
 
-    const rows = list
+    const rows = pagina.items
       .map((e) => {
         const temp =
           e.last_temperature === null
@@ -50,12 +60,14 @@ async function loadEquipments() {
 
     box.innerHTML = `
       <table>
-        <thead>
-          <tr><th>ID</th><th>Nome</th><th>Empresa</th><th>Status</th>
-              <th>Temp. atual</th><th>Alertas</th><th></th></tr>
-        </thead>
+        ${cabecalho("equipamentos", [
+          ["ID", "identifier"], ["Nome", "name"], ["Empresa", "company"],
+          ["Status", "status"], ["Temp. atual", null, 'class="num"'],
+          ["Alertas", null, 'class="num"'], [null, null],
+        ], "loadEquipments")}
         <tbody>${rows}</tbody>
-      </table>`;
+      </table>
+      ${paginador(pagina, "loadEquipments")}`;
   } catch (error) {
     showErrorState(box, error.detail || error.message);
   }
@@ -64,7 +76,7 @@ async function loadEquipments() {
 async function fillClientSelect() {
   const select = document.querySelector("#form-equip select[name=client_id]");
   try {
-    const clients = await api.get("/clients?limit=500");
+    const clients = await api.get("/clients/options");
     select.innerHTML =
       `<option value="">Selecione...</option>` +
       clients.map((c) => `<option value="${c.id}">${escapeHtml(c.company)}</option>`).join("");
@@ -200,5 +212,13 @@ document.addEventListener("DOMContentLoaded", () => {
   loadEquipments();
   fillClientSelect();
   document.getElementById("form-equip").addEventListener("submit", createEquipment);
-  document.getElementById("f-eq-status").addEventListener("change", loadEquipments);
+  const recarregarEq = () => loadEquipments(0);
+  document.getElementById("f-eq-status").addEventListener("change", recarregarEq);
+  document.getElementById("f-eq-busca")
+    .addEventListener("input", debounce(recarregarEq, 350));
+  document.getElementById("btn-eq-limpar").addEventListener("click", () => {
+    document.getElementById("f-eq-busca").value = "";
+    document.getElementById("f-eq-status").value = "";
+    recarregarEq();
+  });
 });

@@ -1,8 +1,14 @@
 """Schemas do Chamado -- o contrato JSON da entidade Ticket."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
-from backend.app.enums import TicketPriority, TicketStatus
+from backend.app.enums import (
+    CATEGORY_LABELS,
+    TICKET_SUBCATEGORIES,
+    TicketCategory,
+    TicketPriority,
+    TicketStatus,
+)
 from backend.app.schemas.client import ClientSummary
 from backend.app.schemas.common import UtcDatetime, required_text
 
@@ -30,11 +36,44 @@ class TicketCreate(BaseModel):
 
     title: required_text(3, 150)
     description: required_text(5, 5000)
-    category: required_text(2, 40)
+
+    # Enum, nao mais texto livre. "Rede " com espaco agora e' 422.
+    category: TicketCategory
+
+    # Opcional: o problema especifico dentro da categoria.
+    subcategory: str | None = Field(
+        default=None, max_length=60,
+        description="Problema especifico; precisa pertencer a categoria escolhida",
+    )
 
     # O tipo e' o Enum. Se chegar "URGENTE", o Pydantic devolve 422 com a
     # lista dos valores aceitos. Nao chega no service, nao chega no banco.
     priority: TicketPriority
+
+    # -----------------------------------------------------------------------
+    # ★ VALIDACAO QUE DEPENDE DE DOIS CAMPOS
+    #
+    # "Fonte queimada" e' valida em HARDWARE e invalida em TELEFONIA. Isso
+    # nao da para checar olhando so a subcategoria -- e' preciso ver a
+    # categoria junto. Por isso usamos model_validator (que roda depois de
+    # todos os campos) em vez de field_validator (que ve um campo so).
+    #
+    # E POR QUE NAO UMA CHECK CONSTRAINT NO BANCO? Daria, mas seria uma
+    # expressao gigante com 50 combinacoes, ilegivel e chata de manter. Aqui
+    # a regra e' declarativa: esta no dicionario TICKET_SUBCATEGORIES.
+    # -----------------------------------------------------------------------
+    @model_validator(mode="after")
+    def check_subcategory(self) -> "TicketCreate":
+        if self.subcategory is None:
+            return self
+        permitidas = TICKET_SUBCATEGORIES.get(self.category, [])
+        if self.subcategory not in permitidas:
+            raise ValueError(
+                f"'{self.subcategory}' nao e' uma subcategoria de "
+                f"{CATEGORY_LABELS[self.category]}. "
+                f"Opcoes: {', '.join(permitidas)}."
+            )
+        return self
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -42,7 +81,8 @@ class TicketCreate(BaseModel):
                 "client_id": 1,
                 "title": "Servidor de arquivos fora do ar",
                 "description": "Desde as 08h ninguem acessa a pasta compartilhada.",
-                "category": "Infraestrutura",
+                "category": "INFRAESTRUTURA",
+                "subcategory": "Servidor fora do ar",
                 "priority": "ALTA",
             }
         }
@@ -84,7 +124,8 @@ class TicketOut(BaseModel):
 
     title: str
     description: str
-    category: str
+    category: TicketCategory
+    subcategory: str | None = None
     priority: TicketPriority
     status: TicketStatus
 
@@ -93,3 +134,16 @@ class TicketOut(BaseModel):
     # None enquanto o chamado nao for finalizado. No JSON sai como null.
     # E' informacao: null = "ainda nao fechou".
     closed_at: UtcDatetime | None = None
+
+    # -----------------------------------------------------------------------
+    # CAMPO CALCULADO -- existe no JSON, nao existe no banco.
+    #
+    # O banco guarda ACESSO_E_SENHA; a tela precisa de "Acesso e Senha".
+    # Em vez de o JavaScript manter a propria tabela de traducao (que sairia
+    # do ar assim que uma categoria nova nascesse), o backend ja entrega o
+    # rotulo pronto. Uma fonte da verdade so.
+    # -----------------------------------------------------------------------
+    @computed_field
+    @property
+    def category_label(self) -> str:
+        return CATEGORY_LABELS.get(self.category, self.category.value)

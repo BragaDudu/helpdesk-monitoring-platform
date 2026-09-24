@@ -56,6 +56,18 @@ async function request(method, path, body) {
     headers: { "Content-Type": "application/json" },
   };
 
+  // ★ O CRACHA VAI EM TODA REQUISICAO.
+  //   Como TODAS as chamadas do sistema passam por esta funcao, basta
+  //   acrescentar o cabecalho AQUI para a aplicacao inteira ficar
+  //   autenticada. Se cada tela chamasse fetch por conta propria, seria
+  //   preciso lembrar do token em 15 lugares -- e um deles ficaria de fora.
+  //
+  //   Este e' o retorno pratico de ter centralizado o fetch desde o comeco.
+  const token = typeof auth !== "undefined" ? auth.token() : null;
+  if (token) {
+    options.headers["Authorization"] = `Bearer ${token}`;
+  }
+
   // So enviamos corpo em POST/PATCH/PUT. GET e DELETE nao tem corpo.
   if (body !== undefined) {
     options.body = JSON.stringify(body);
@@ -92,6 +104,23 @@ async function request(method, path, body) {
 
   // response.ok e' true para status 200-299. Qualquer coisa fora disso
   // (404, 409, 422, 500) vira uma excecao que a pagina vai capturar.
+  // ★ 401 EM QUALQUER LUGAR = A SESSAO ACABOU.
+  //
+  //   O token expira em 8 horas. Quando isso acontece no meio do uso, o
+  //   usuario nao pode ficar vendo "erro 401" sem entender: ele e' levado
+  //   ao login automaticamente.
+  //
+  //   A pagina de login e' excluida da regra, senao um login com senha
+  //   errada (que responde 401) recarregaria a propria tela e apagaria a
+  //   mensagem de erro antes de o usuario le-la.
+  if (response.status === 401 && !location.pathname.endsWith("login.html")) {
+    if (typeof auth !== "undefined") auth.limpar();
+    location.replace("login.html");
+    // A excecao ainda e' lancada: o redirecionamento nao e' instantaneo, e
+    // sem ela o codigo seguinte continuaria rodando com dado nulo.
+    throw new ApiError(401, "unauthorized", "Sessao expirada.");
+  }
+
   if (!response.ok) {
     const detail =
       (data && (data.detail || data.error)) ||

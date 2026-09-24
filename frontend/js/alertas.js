@@ -11,29 +11,72 @@ async function loadAnomalies() {
   const box = document.getElementById("anomalies");
   try {
     const items = await api.get("/equipments/anomalies");
+
     if (!items.length) {
       box.innerHTML = `<div class="state state--empty" style="color:var(--green)">✓ Nenhuma situação anormal no momento.</div>`;
       return;
     }
-    box.innerHTML = items
+
+    /*
+     * ★ O PROBLEMA QUE ESTE BLOCO RESOLVE
+     *
+     *   Com 900 equipamentos, esta lista chegou a 1.115 linhas -- todas
+     *   desenhadas de uma vez. A tela virava uma rolagem sem fim, e uma
+     *   lista que ninguem consegue ler é o mesmo que nao ter lista.
+     *
+     *   A correcao nao e' so paginar: e' MUDAR A PERGUNTA. Ninguem precisa
+     *   ver as 899 anomalias uma a uma. Precisa saber QUANTAS sao de cada
+     *   tipo, e ver as mais graves. Resumo em cima, detalhe embaixo.
+     */
+    const porTipo = {};
+    for (const a of items) porTipo[a.anomaly_type] = (porTipo[a.anomaly_type] || 0) + 1;
+
+    // Ordena por gravidade: ALTA primeiro. O que exige acao agora fica no topo.
+    const peso = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
+    const ordenadas = [...items].sort(
+      (x, y) => (peso[x.severity] ?? 9) - (peso[y.severity] ?? 9)
+    );
+    const MOSTRAR = 8;
+    const visiveis = ordenadas.slice(0, MOSTRAR);
+
+    const resumo = Object.entries(porTipo)
+      .sort((a, b) => b[1] - a[1])
+      .map(([tipo, n]) => `<span class="chip">${escapeHtml(tipo.replace(/_/g, " "))} <strong>${n}</strong></span>`)
+      .join("");
+
+    const linhas = visiveis
       .map(
         (a) => `
         <div class="detail-row">
           <dt>
             <span class="sev sev--${a.severity.toLowerCase()}">[${a.severity}]</span>
-            <strong>${escapeHtml(a.identifier)}</strong> — ${escapeHtml(a.anomaly_type)}
+            <strong>${escapeHtml(a.identifier)}</strong>
           </dt>
-          <dd class="muted" style="font-weight:400">${escapeHtml(a.detail)}</dd>
+          <dd class="muted" style="font-weight:400">
+            ${escapeHtml(a.client_company || "")} — ${escapeHtml(a.detail)}
+          </dd>
         </div>`
       )
       .join("");
+
+    const restantes = items.length - visiveis.length;
+
+    box.innerHTML = `
+      <div class="filter-chips" style="margin-bottom:14px">${resumo}</div>
+      ${linhas}
+      ${restantes > 0
+        ? `<div class="state state--empty" style="padding:14px 0 0">
+             + ${restantes} outras situações. Use a lista de equipamentos
+             para filtrar por empresa ou status.
+           </div>`
+        : ""}`;
   } catch (error) {
     showErrorState(box, error.detail || error.message);
   }
 }
 
 // Painel inferior: histórico de alertas, com filtro por status.
-async function loadAlerts() {
+async function loadAlerts(offset = 0) {
   const box = document.getElementById("alerts-table");
   showLoading(box);
 
@@ -41,7 +84,9 @@ async function loadAlerts() {
   const qs = status ? `?status=${status}` : "";
 
   try {
-    const alerts = await api.get(`/alerts${qs}`);
+    const sep = qs ? "&" : "?";
+    const pagina = await api.get(`/alerts${qs}${sep}limit=${TAMANHO_PAGINA}&offset=${offset}&${paramsDeOrdem('alertas', new URLSearchParams())}`);
+    const alerts = pagina.items;
     if (!alerts.length) return showEmpty(box, "Nenhum alerta com esse filtro.");
 
     const rows = alerts
@@ -61,12 +106,14 @@ async function loadAlerts() {
 
     box.innerHTML = `
       <table>
-        <thead>
-          <tr><th>ID</th><th>Equipamento</th><th>Empresa</th><th>Temp.</th>
-              <th>Status</th><th>Detectado em</th><th></th></tr>
-        </thead>
+        ${cabecalho("alertas", [
+          ["ID", "id"], ["Equipamento", "identifier"], ["Empresa", "company"],
+          ["Temp.", "temperature", 'class="num"'], ["Status", "status"],
+          ["Detectado em", "created_at"], [null, null],
+        ], "loadAlerts")}
         <tbody>${rows}</tbody>
-      </table>`;
+      </table>
+      ${paginador(pagina, "loadAlerts")}`;
   } catch (error) {
     showErrorState(box, error.detail || error.message);
   }
@@ -109,5 +156,5 @@ async function setAlert(alertId, status) {
 document.addEventListener("DOMContentLoaded", () => {
   loadAnomalies();
   loadAlerts();
-  document.getElementById("f-alert-status").addEventListener("change", loadAlerts);
+  document.getElementById("f-alert-status").addEventListener("change", () => loadAlerts(0));
 });

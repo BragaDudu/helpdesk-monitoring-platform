@@ -4,7 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Alertas — HelpDesk & Monitoring</title>
-    <link rel="stylesheet" href="css/style.css" />
+    <!-- ★ GUARDA DE SESSAO -- roda ANTES de tudo.
+         Sem token, redireciona para o login imediatamente. Se esperasse o
+         DOMContentLoaded, a tela apareceria vazia e dispararia quatro
+         erros 401 antes de redirecionar. -->
+    <script src="js/auth.js?v=11"></script>
+    <script>if (!auth.exigirLogin()) { throw new Error("redirecionando"); }</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" />
+    <link rel="stylesheet" href="css/style.css?v=11" />
   </head>
   <body>
     <div class="layout">
@@ -17,6 +27,8 @@
           <a href="equipamentos.html" data-page="equipamentos.html"><span class="icon">▣</span> Equipamentos</a>
           <a href="alertas.html" data-page="alertas.html"><span class="icon">⚠</span> Alertas</a>
         </nav>
+        <!-- preenchido por ui.js -> montarSessao() -->
+        <div class="sidebar__foot"></div>
       </aside>
 
       <main class="content">
@@ -55,8 +67,8 @@
       </main>
     </div>
 
-    <script src="js/api.js"></script>
-    <script src="js/ui.js"></script>
-    <script src="js/alertas.js"></script>
+    <script src="js/api.js?v=11"></script>
+    <script src="js/ui.js?v=11"></script>
+    <script src="js/alertas.js?v=11"></script>
   </body>
 </html>

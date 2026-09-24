@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.config import FRONTEND_DIR, settings
 from backend.app.database import Base, engine
 from backend.app.exceptions import DomainError
-from backend.app.routers import alerts, analytics, clients, equipments, tickets
+from backend.app.routers import alerts, analytics, auth, clients, equipments, tickets
 
 # Importa os models para registra-los em Base.metadata antes do create_all.
 import backend.app.models  # noqa: F401
@@ -129,6 +129,91 @@ async def handle_domain_error(request: Request, exc: DomainError) -> JSONRespons
     )
 
 
+# ---------------------------------------------------------------------------
+# TRADUCAO DE ERRO DE VALIDACAO PARA PORTUGUES DE GENTE
+#
+# O Pydantic devolve mensagens tecnicas em ingles:
+#     "String should have at least 5 characters"
+#     "value is not a valid email address: An email address must have an @-sign."
+#
+# Isso serve para DEPURAR, nao para mostrar ao usuario final. Quem esta
+# cadastrando um cliente nao quer saber o que e' uma "String".
+#
+# ★ POR QUE TRADUZIR AQUI E NAO NO FRONTEND:
+#   porque o frontend nao e' a unica porta de entrada -- a mesma API atende
+#   Swagger, integracoes e (no futuro) um app. Traduzindo no backend, a
+#   mensagem boa chega para todo mundo, escrita uma vez so.
+# ---------------------------------------------------------------------------
+ROTULOS_DOS_CAMPOS: dict[str, str] = {
+    "name": "O nome",
+    "company": "A empresa",
+    "email": "O e-mail",
+    "phone": "O telefone",
+    "title": "O titulo",
+    "description": "A descricao",
+    "category": "A categoria",
+    "subcategory": "O problema especifico",
+    "priority": "A prioridade",
+    "status": "O status",
+    "client_id": "O cliente",
+    "temperature": "A temperatura",
+    "identifier": "O identificador",
+    "location": "A localizacao",
+}
+
+
+def traduzir_erro(campo: str, erro: dict) -> str:
+    """Transforma um erro do Pydantic numa frase que o usuario entende.
+
+    RECEBE: o nome do campo e o dicionario de erro do Pydantic, que tem
+            'type' (o codigo do erro) e 'ctx' (os limites que falharam).
+    RETORNA: uma frase pronta, comecando com o rotulo do campo.
+    """
+    rotulo = ROTULOS_DOS_CAMPOS.get(campo, f"O campo '{campo}'")
+    tipo = erro.get("type", "")
+    ctx = erro.get("ctx", {}) or {}
+
+    if tipo == "missing":
+        return f"{rotulo} e' obrigatorio."
+
+    if tipo == "string_too_short":
+        minimo = ctx.get("min_length", "?")
+        return (
+            f"{rotulo} precisa ter pelo menos {minimo} caracteres."
+            if minimo != 1
+            else f"{rotulo} nao pode ficar em branco."
+        )
+
+    if tipo == "string_too_long":
+        return f"{rotulo} pode ter no maximo {ctx.get('max_length', '?')} caracteres."
+
+    if tipo in ("int_parsing", "float_parsing", "decimal_parsing"):
+        return f"{rotulo} precisa ser um numero."
+
+    if tipo in ("greater_than", "greater_than_equal"):
+        return f"{rotulo} precisa ser maior que {ctx.get('gt', ctx.get('ge', '?'))}."
+
+    if tipo in ("less_than", "less_than_equal"):
+        return f"{rotulo} precisa ser menor que {ctx.get('lt', ctx.get('le', '?'))}."
+
+    if tipo == "enum":
+        # ctx['expected'] ja vem como "'A', 'B' or 'C'"
+        return f"{rotulo} precisa ser uma das opcoes: {ctx.get('expected', '')}."
+
+    if tipo == "value_error":
+        mensagem = str(erro.get("msg", "")).replace("Value error, ", "").strip()
+        # Erros de e-mail vem do email-validator, sempre em ingles.
+        if "email" in mensagem.lower() or campo == "email":
+            return f"{rotulo} nao parece valido. Exemplo: nome@empresa.com.br"
+        # Os validadores proprios (telefone, subcategoria) ja escrevem em
+        # portugues -- aproveitamos a mensagem como veio.
+        return mensagem if mensagem.endswith(".") else f"{mensagem}."
+
+    # Rede de seguranca: erro que ainda nao mapeamos nao pode virar
+    # mensagem vazia. Mostramos o texto do Pydantic com o campo na frente.
+    return f"{rotulo}: {erro.get('msg', 'valor invalido')}."
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_validation_error(
     request: Request, exc: RequestValidationError
@@ -152,9 +237,9 @@ async def handle_validation_error(
             for part in error["loc"]
             if part not in ("body", "query", "path")
         )
-        problems.append(f"{field}: {error['msg']}" if field else error["msg"])
+        problems.append(traduzir_erro(field, error))
 
-    detail = "Dados invalidos. " + " | ".join(problems)
+    detail = " ".join(problems)
     logger.warning(
         "[validation] %s %s -> %s", request.method, request.url.path, detail
     )
@@ -198,6 +283,10 @@ def health() -> dict:
     return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
 
 
+# ★ auth vem PRIMEIRO na lista por clareza: e' a porta de entrada.
+#   A ordem entre routers de prefixos diferentes nao muda o roteamento,
+#   mas muda a ordem das secoes no Swagger -- e login deve abrir a doc.
+app.include_router(auth.router)
 app.include_router(clients.router)
 app.include_router(tickets.router)
 app.include_router(analytics.router)

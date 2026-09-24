@@ -4,8 +4,11 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
+from backend.app.deps import escopo_do_cliente, get_current_user, require_admin
+from backend.app.models import User
+
 from backend.app.enums import AlertStatus, EquipmentStatus
-from backend.app.schemas.common import ErrorResponse
+from backend.app.schemas.common import ErrorResponse, Page, montar_pagina
 from backend.app.schemas.equipment import (
     AlertOut,
     AnomalyItem,
@@ -32,33 +35,45 @@ router = APIRouter(prefix="/api/equipments", tags=["Monitoramento (Exercicio 3)"
     },
 )
 def create_equipment(
-    payload: EquipmentCreate, db: Session = Depends(get_db)
+    payload: EquipmentCreate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
 ) -> EquipmentOut:
     """Cadastra um equipamento instalado em um cliente."""
     return monitoring_service.create_equipment(db, payload)
 
 
-@router.get("", response_model=list[EquipmentOut], summary="Listar equipamentos")
+@router.get("", response_model=Page[EquipmentOut], summary="Listar equipamentos")
 def list_equipments(
     client_id: int | None = Query(None, ge=1),
     status_filter: EquipmentStatus | None = Query(None, alias="status"),
-    limit: int = Query(200, ge=1, le=1000),
+    search: str | None = Query(None, description="Busca por identificador, nome ou local"),
+    limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-) -> list[EquipmentOut]:
+    sort: str | None = Query(None, description="Coluna: identifier, name, company, location, status"),
+    order: str | None = Query(None, pattern="^(asc|desc)$"),
+    escopo: int | None = Depends(escopo_do_cliente),
+) -> Page[EquipmentOut]:
     """Lista equipamentos com a TEMPERATURA ATUAL e os alertas abertos.
 
     A temperatura atual vem da leitura mais recente, trazida por uma
     subconsulta correlacionada na MESMA consulta -- nao ha requisicao extra
     por equipamento.
     """
-    return monitoring_service.list_equipments(
+    items, total = monitoring_service.list_equipments(
         db,
         client_id=client_id,
         status=status_filter.value if status_filter else None,
+        search=search,
         limit=limit,
         offset=offset,
+        com_total=True,
+        client_scope=escopo,
+        sort=sort,
+        order=order,
     )
+    return montar_pagina(items, total, limit, offset)
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +93,10 @@ def list_equipments(
     response_model=list[AnomalyItem],
     summary="Detectar situacoes anormais",
 )
-def detect_anomalies(db: Session = Depends(get_db)) -> list[AnomalyItem]:
+def detect_anomalies(
+    db: Session = Depends(get_db),
+    escopo: int | None = Depends(escopo_do_cliente),
+) -> list[AnomalyItem]:
     """Item 5 do Exercicio 3: detectar situacoes anormais.
 
     Diferente do alerta (que e' um EVENTO gravado no banco), a anomalia e'
@@ -92,7 +110,7 @@ def detect_anomalies(db: Session = Depends(get_db)) -> list[AnomalyItem]:
 
     Ordenado por severidade: o que precisa de atencao aparece primeiro.
     """
-    return monitoring_service.detect_anomalies(db)
+    return monitoring_service.detect_anomalies(db, client_scope=escopo)
 
 
 @router.get(
@@ -101,9 +119,13 @@ def detect_anomalies(db: Session = Depends(get_db)) -> list[AnomalyItem]:
     summary="Consultar equipamento",
     responses={404: {"model": ErrorResponse}},
 )
-def get_equipment(equipment_id: int, db: Session = Depends(get_db)) -> EquipmentOut:
+def get_equipment(
+    equipment_id: int,
+    db: Session = Depends(get_db),
+    escopo: int | None = Depends(escopo_do_cliente),
+) -> EquipmentOut:
     """Detalhe de um equipamento, com temperatura atual e alertas abertos."""
-    return monitoring_service.get_equipment(db, equipment_id)
+    return monitoring_service.get_equipment(db, equipment_id, client_scope=escopo)
 
 
 @router.patch(
@@ -116,13 +138,16 @@ def change_equipment_status(
     equipment_id: int,
     payload: EquipmentStatusUpdate,
     db: Session = Depends(get_db),
+    escopo: int | None = Depends(escopo_do_cliente),
 ) -> EquipmentOut:
     """Altera o estado operacional (ONLINE / OFFLINE / MANUTENCAO).
 
     Ao contrario do chamado, aqui NAO ha maquina de estados: no mundo real
     um equipamento pode ir de qualquer estado para qualquer outro.
     """
-    return monitoring_service.change_equipment_status(db, equipment_id, payload.status)
+    return monitoring_service.change_equipment_status(
+        db, equipment_id, payload.status, client_scope=escopo
+    )
 
 
 # ===========================================================================
@@ -139,7 +164,10 @@ def change_equipment_status(
     },
 )
 def create_reading(
-    equipment_id: int, payload: ReadingCreate, db: Session = Depends(get_db)
+    equipment_id: int,
+    payload: ReadingCreate,
+    db: Session = Depends(get_db),
+    escopo: int | None = Depends(escopo_do_cliente),
 ) -> ReadingCreatedResponse:
     """Recebe uma leitura de equipamento e aplica a regra de temperatura.
 
@@ -160,7 +188,9 @@ def create_reading(
       Um sensor IoT chamando este endpoint direto, sem navegador, recebe
       exatamente o mesmo tratamento.
     """
-    return monitoring_service.register_reading(db, equipment_id, payload)
+    return monitoring_service.register_reading(
+        db, equipment_id, payload, client_scope=escopo
+    )
 
 
 @router.get(
@@ -174,23 +204,33 @@ def list_readings(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
+    escopo: int | None = Depends(escopo_do_cliente),
 ) -> list[ReadingOut]:
     """Item 4 do Exercicio 3: historico, da leitura mais recente para a mais antiga."""
+    # get_equipment aplica a checagem de dono e levanta 403 se for de outra
+    # empresa -- por isso ele vem ANTES de listar as leituras.
+    monitoring_service.get_equipment(db, equipment_id, client_scope=escopo)
     return monitoring_service.list_readings(db, equipment_id, limit=limit, offset=offset)
 
 
 @router.get(
     "/{equipment_id}/alerts",
-    response_model=list[AlertOut],
+    response_model=Page[AlertOut],
     summary="Alertas do equipamento",
     responses={404: {"model": ErrorResponse}},
 )
 def list_equipment_alerts(
     equipment_id: int,
     status_filter: AlertStatus | None = Query(None, alias="status"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-) -> list[AlertOut]:
+    escopo: int | None = Depends(escopo_do_cliente),
+) -> Page[AlertOut]:
     """Todos os alertas gerados por um equipamento."""
-    return monitoring_service.list_equipment_alerts(
-        db, equipment_id, status=status_filter.value if status_filter else None
+    items, total = monitoring_service.list_equipment_alerts(
+        db, equipment_id, client_scope=escopo,
+        status=status_filter.value if status_filter else None,
+        limit=limit, offset=offset,
     )
+    return montar_pagina(items, total, limit, offset)

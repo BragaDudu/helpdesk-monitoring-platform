@@ -1,17 +1,20 @@
 """Regras de negocio do Chamado."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.app.enums import TICKET_STATUS_TRANSITIONS, TicketStatus
-from backend.app.exceptions import BusinessRuleError, NotFoundError
-from backend.app.models import Ticket
+from backend.app.exceptions import BusinessRuleError, ForbiddenError, NotFoundError
+from backend.app.models import Client, Ticket
+from backend.app.schemas.common import aplicar_ordenacao
 from backend.app.schemas.ticket import TicketCreate
 from backend.app.services.client_service import get_client
 from backend.app.utils import utcnow
 
 
-def create_ticket(db: Session, payload: TicketCreate) -> Ticket:
+def create_ticket(
+    db: Session, payload: TicketCreate, client_scope: int | None = None
+) -> Ticket:
     """Abre um chamado.
 
     PASSO A PASSO (e' este fluxo que voce vai narrar na apresentacao):
@@ -36,13 +39,20 @@ def create_ticket(db: Session, payload: TicketCreate) -> Ticket:
     RECEBE: sessao + TicketCreate validado
     RETORNA: o Ticket criado, com o cliente carregado
     """
-    get_client(db, payload.client_id)  # passo 1 (levanta 404 se nao existir)
+    # ★ O ESCOPO ENTRA JA' NA CRIACAO, nao so' na leitura.
+    #   Sem isto, um ADMIN_EMPRESA da empresa 3 abriria chamado em nome da
+    #   empresa 7 so mandando client_id=7 no corpo. Ler o dado do outro e'
+    #   ruim; ESCREVER no dado do outro e' pior.
+    get_client(db, payload.client_id, client_scope)  # 404 se nao existe, 403 se nao e' dele
 
     ticket = Ticket(
         client_id=payload.client_id,
         title=payload.title,
         description=payload.description,
         category=payload.category,
+        # A combinacao categoria/subcategoria ja foi validada pelo schema.
+        # Aqui so gravamos: o service confia no que o Pydantic entregou.
+        subcategory=payload.subcategory,
         priority=payload.priority,
         # status e opened_at ficam por conta dos defaults do model
     )
@@ -59,9 +69,13 @@ def list_tickets(
     status: str | None = None,
     priority: str | None = None,
     category: str | None = None,
+    search: str | None = None,
     limit: int = 200,
     offset: int = 0,
-) -> list[Ticket]:
+    client_scope: int | None = None,
+    sort: str | None = None,
+    order: str | None = None,
+) -> tuple[list[Ticket], int]:
     """Lista chamados com filtros opcionais, do mais recente para o mais antigo.
 
     ★ joinedload(Ticket.client) RESOLVE O PROBLEMA "N+1".
@@ -81,35 +95,110 @@ def list_tickets(
     "status=ABERTO & priority=ALTA" sem escrever uma consulta para cada
     combinacao possivel.
     """
-    stmt = select(Ticket).options(joinedload(Ticket.client))
+    # ★ AS CONDICOES SAO MONTADAS UMA VEZ E USADAS DUAS.
+    #   A listagem e a contagem PRECISAM concordar: se o COUNT usasse um
+    #   filtro diferente da lista, o rodape diria "5.000 resultados" e a
+    #   pagina 2 viria vazia. Montando as condicoes num lugar so, e'
+    #   impossivel elas divergirem.
+    condicoes = _filtros_de_chamado(
+        client_id, status, priority, category, search, client_scope
+    )
 
-    if client_id is not None:
-        stmt = stmt.where(Ticket.client_id == client_id)
-    if status:
-        stmt = stmt.where(Ticket.status == status)
-    if priority:
-        stmt = stmt.where(Ticket.priority == priority)
-    if category:
-        stmt = stmt.where(Ticket.category == category)
+    # 1) Quantos existem NO TOTAL com estes filtros (sem limit/offset).
+    total = db.scalar(
+        select(func.count()).select_from(Ticket).where(*condicoes)
+    ) or 0
 
-    stmt = stmt.order_by(Ticket.opened_at.desc(), Ticket.id.desc())
+    # 2) A fatia pedida.
+    stmt = (
+        select(Ticket)
+        .options(joinedload(Ticket.client))
+        .join(Client, Ticket.client_id == Client.id)
+        .where(*condicoes)
+    )
+    stmt = aplicar_ordenacao(
+        stmt, sort, order,
+        # ★ "company" ordena por uma coluna de OUTRA tabela. So funciona
+        #   por causa do join acima -- ordenar por algo que nao esta na
+        #   consulta e' erro de SQL.
+        {"id": Ticket.id, "title": Ticket.title, "company": Client.company,
+         "category": Ticket.category, "priority": Ticket.priority,
+         "status": Ticket.status, "opened_at": Ticket.opened_at},
+        padrao=[Ticket.opened_at.desc(), Ticket.id.desc()],
+    )
     stmt = stmt.limit(limit).offset(offset)
 
-    return list(db.execute(stmt).scalars().all())
+    return list(db.execute(stmt).scalars().all()), total
 
 
-def get_ticket(db: Session, ticket_id: int) -> Ticket:
-    """Busca UM chamado pelo id, ja com o cliente carregado."""
+def _filtros_de_chamado(
+    client_id: int | None,
+    status: str | None,
+    priority: str | None,
+    category: str | None,
+    search: str | None,
+    client_scope: int | None = None,
+) -> list:
+    """Traduz os filtros da URL em condicoes SQL (a clausula WHERE).
+
+    ★ CADA "if" AQUI E' UM PEDACO DE WHERE QUE SO ENTRA SE FOI PEDIDO.
+      Sem isso seria preciso uma consulta pronta para cada combinacao
+      possivel de filtros -- e sao dezenas.
+
+    ★ SEGURANCA: o texto da busca NUNCA e' concatenado no SQL. O ilike()
+      manda o termo como PARAMETRO. Se alguem buscar por  ' OR 1=1 --  isso
+      e' procurado como texto, nao executado como comando.
+    """
+    condicoes = []
+
+    # ★ PRIMEIRA condicao, sempre. Ver o comentario equivalente no
+    #   client_service: o filtro de empresa nunca fica atras de um "if".
+    if client_scope is not None:
+        condicoes.append(Ticket.client_id == client_scope)
+
+    if client_id is not None:
+        condicoes.append(Ticket.client_id == client_id)
+    if status:
+        condicoes.append(Ticket.status == status)
+    if priority:
+        condicoes.append(Ticket.priority == priority)
+    if category:
+        condicoes.append(Ticket.category == category)
+    if search and search.strip():
+        termo = f"%{search.strip()}%"
+        # OR: acha o termo no titulo OU na descricao OU no problema.
+        condicoes.append(
+            Ticket.title.ilike(termo)
+            | Ticket.description.ilike(termo)
+            | Ticket.subcategory.ilike(termo)
+        )
+    return condicoes
+
+
+def get_ticket(
+    db: Session, ticket_id: int, client_scope: int | None = None
+) -> Ticket:
+    """Busca UM chamado pelo id, ja com o cliente carregado.
+
+    ★ Tambem faz a checagem de dono (IDOR): saber o numero do chamado nao
+      pode ser suficiente para le-lo.
+    """
     stmt = (
         select(Ticket).options(joinedload(Ticket.client)).where(Ticket.id == ticket_id)
     )
     ticket = db.execute(stmt).scalar_one_or_none()
     if ticket is None:
         raise NotFoundError("Chamado", ticket_id)
+
+    if client_scope is not None and ticket.client_id != client_scope:
+        raise ForbiddenError("Voce nao tem acesso a este chamado.")
+
     return ticket
 
 
-def list_tickets_by_client(db: Session, client_id: int, **filters) -> list[Ticket]:
+def list_tickets_by_client(
+    db: Session, client_id: int, client_scope: int | None = None, **filters
+) -> tuple[list[Ticket], int]:
     """Chamados de UM cliente -- item 4 do Exercicio 1.
 
     Chama get_client primeiro DE PROPOSITO. Assim:
@@ -120,12 +209,15 @@ def list_tickets_by_client(db: Session, client_id: int, **filters) -> list[Ticke
     [] nos dois casos, o usuario nao saberia se digitou o id errado ou se o
     cliente realmente nao tem chamados.
     """
-    get_client(db, client_id)
-    return list_tickets(db, client_id=client_id, **filters)
+    get_client(db, client_id, client_scope)
+    return list_tickets(db, client_id=client_id, client_scope=client_scope, **filters)
 
 
 def change_ticket_status(
-    db: Session, ticket_id: int, new_status: TicketStatus
+    db: Session,
+    ticket_id: int,
+    new_status: TicketStatus,
+    client_scope: int | None = None,
 ) -> Ticket:
     """Altera o status de um chamado -- item 5 do Exercicio 1.
 
@@ -178,7 +270,8 @@ def change_ticket_status(
     RETORNA: o Ticket atualizado, com o cliente carregado
     ERROS:   NotFoundError (404) | BusinessRuleError (409)
     """
-    ticket = get_ticket(db, ticket_id)
+    # Passa o escopo: alterar o chamado de outra empresa e' 403, nao 200.
+    ticket = get_ticket(db, ticket_id, client_scope)
     current_status = ticket.status
 
     # passo 2 -- idempotencia

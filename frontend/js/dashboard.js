@@ -76,7 +76,7 @@ async function loadCategoryChart() {
     const rows = await api.get("/analytics/tickets-by-category");
     if (!rows.length) return showEmpty(box);
     const max = Math.max(...rows.map((r) => r.total));
-    box.innerHTML = rows.map((r) => barRow(r.category, r.total, max)).join("");
+    box.innerHTML = rows.map((r) => barRow(r.category_label, r.total, max)).join("");
   } catch (e) {
     showErrorState(box, e.detail || e.message);
   }
@@ -106,7 +106,7 @@ async function loadResolutionChart() {
     const max = Math.max(...rows.map((r) => r.average_hours));
     // largura pela quantidade de horas; texto pelo formato legivel ("2d 6h")
     box.innerHTML = rows
-      .map((r) => barRow(r.category, r.average_hours, max, r.formatted))
+      .map((r) => barRow(r.category_label, r.average_hours, max, r.formatted))
       .join("");
   } catch (e) {
     showErrorState(box, e.detail || e.message);

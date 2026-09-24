@@ -49,8 +49,19 @@ class ClientBase(BaseModel):
     # EmailStr vem do Pydantic (via email-validator). Ele checa formato,
     # dominio e caracteres proibidos. "joao@" ou "joao.com" sao rejeitados
     # com HTTP 422 antes de chegar ao service.
-    name: required_text(2, 120)
-    company: required_text(2, 120)
+    # ★ MINIMOS ESCOLHIDOS, NAO ARBITRARIOS:
+    #   nome    >= 5  -- "Ana" tem 3 e e' um nome real, mas aqui o campo e' o
+    #                    nome do CONTATO responsavel, e a empresa espera nome
+    #                    e sobrenome. 5 barra o preenchimento preguicoso
+    #                    ("asd", "aaa") sem recusar gente de verdade.
+    #   empresa >= 10 -- razao social praticamente nao existe com menos
+    #                    ("ACME LTDA" ja tem 9). Evita cadastro pela metade.
+    #
+    #   Estes numeros sao REGRA DE NEGOCIO, e por isso ficam no schema: um
+    #   `minlength` no HTML seria so conveniencia, e o usuario contorna pelo
+    #   DevTools em dois cliques.
+    name: required_text(5, 120)
+    company: required_text(10, 120)
     email: EmailStr
     phone: required_text(10, 25)
 
@@ -89,8 +100,8 @@ class ClientUpdate(BaseModel):
     dois com exclude_unset=True no service.
     """
 
-    name: required_text(2, 120) | None = None
-    company: required_text(2, 120) | None = None
+    name: required_text(5, 120) | None = None
+    company: required_text(10, 120) | None = None
     email: EmailStr | None = None
     phone: required_text(10, 25) | None = None
 
