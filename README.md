@@ -1,234 +1,323 @@
+<div align="center">
+
 # HelpDesk & Monitoring Platform
 
-Plataforma de gestão de TI que unifica os três exercícios da avaliação em uma
-única aplicação **full stack real**: cadastro de clientes e chamados, análises
-sobre esses chamados, e monitoramento de equipamentos com geração automática
-de alertas.
+**Plataforma de gestão para empresas de TI que atendem outras empresas.**
+Chamados, análises e monitoramento de equipamentos com alerta automático de temperatura.
 
-> **Não é mockup.** Backend em FastAPI, banco SQLite persistente, API REST de
-> verdade, regras de negócio no servidor e frontend consumindo a API por
-> `fetch()`. Os dados sobrevivem a F5, a reinício do servidor e a reboot da
-> máquina.
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00)
+![SQLite](https://img.shields.io/badge/SQLite-3-003B57?logo=sqlite&logoColor=white)
+![Testes](https://img.shields.io/badge/testes-55%20passando-2f9e44)
+
+![Dashboard](docs/img/02-dashboard.png)
+
+</div>
 
 ---
 
-## 1. O que é o projeto
+## O problema
 
-| Exercício | Vira o módulo | Endpoints |
-|---|---|---|
-| 1 — Sistema de chamados | Clientes + Chamados | `/api/clients`, `/api/tickets` |
-| 2 — Banco e análise | Analytics | `/api/analytics/*` |
-| 3 — Monitoramento | Equipamentos + Leituras + Alertas | `/api/equipments`, `/api/alerts` |
+Uma empresa de TI terceirizada atende dezenas de outras empresas. Hoje ela controla isso
+por planilha e grupo de WhatsApp — e não consegue responder três perguntas básicas:
 
-Os três giram em torno de uma entidade central — o **Cliente** — então foram
-unificados numa só plataforma em vez de três programas soltos.
+- **Quantos chamados estão abertos agora, e de quem?**
+- **Quanto tempo a gente leva para resolver?** (o número que vai para a renovação do contrato)
+- **Aquele servidor está esquentando?** — descoberto só quando para, de madrugada.
 
-## 2. Arquitetura
+Esta plataforma responde as três. E a terceira ela responde **sozinha**: um agente coletor
+lê a temperatura dos equipamentos periodicamente e o servidor grava um alerta quando
+ultrapassa o limite, sem ninguém digitar nada.
 
-Arquitetura em **4 camadas**. Cada requisição atravessa:
+---
+
+## Como funciona, em uma imagem
 
 ```
-NAVEGADOR (HTML/CSS/JS + fetch)
-      │  HTTP / JSON
-ROUTERS      (FastAPI)      -> falam HTTP, sem regra de negócio
-SCHEMAS      (Pydantic)     -> validam entrada e formatam saída (422 automático)
-SERVICES     (Python puro)  -> AQUI moram as regras de negócio
-MODELS       (SQLAlchemy)   -> classes que viram tabelas
-      │  SQL parametrizado
-SQLite  ->  data/app.db  (arquivo em disco)
+     AGENTE COLETOR                    NAVEGADOR
+   (sensor, sem tela)                (HTML + CSS + JS)
+           │                                │
+           └──────────  HTTP / JSON  ────────┘
+                            │
+            ┌───────────────▼────────────────┐
+            │  ROUTERS    falam HTTP          │
+            │  SCHEMAS    validam (422)       │
+            │  SERVICES   ★ as regras         │
+            │  MODELS     viram tabelas       │
+            └───────────────┬────────────────┘
+                            │  SQL parametrizado
+                     SQLite · data/app.db
 ```
 
-Por que separar? Para poder testar a regra dos 80°C sem subir servidor web, e
-para o *seed* reusar o mesmo código que a API usa. **Erros de negócio**
-(`NotFoundError`, `ConflictError`) são levantados pelos services sem saber o que
-é HTTP; um único handler no `main.py` os traduz em 404/409.
+A regra de negócio mora **no servidor**, não no JavaScript. É isso que faz o agente
+coletor — que não tem navegador nenhum — disparar exatamente os mesmos alertas que
+a tela dispararia.
 
-## 3. Tecnologias
+---
 
-| Ferramenta | Para quê |
+## As telas
+
+<table>
+<tr>
+<td width="50%">
+
+**Chamados** — busca no banco, filtros combináveis e paginação sobre 5.000 registros
+
+![Chamados](docs/img/03-chamados.png)
+
+</td>
+<td width="50%">
+
+**Equipamentos** — temperatura atual e alertas abertos, numa consulta só
+
+![Equipamentos](docs/img/04-equipamentos.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Alertas** — anomalias resumidas por tipo + histórico paginado
+
+![Alertas](docs/img/05-alertas.png)
+
+</td>
+<td width="50%">
+
+**Clientes** — cadastro com validação e busca por nome, empresa ou e-mail
+
+![Clientes](docs/img/06-clientes.png)
+
+</td>
+</tr>
+</table>
+
+### Abrir chamado: categoria e problema encadeados
+
+O segundo campo só libera depois que a categoria é escolhida, e as opções vêm da API —
+não há lista escrita no HTML. Uma fonte da verdade, duas pontas sempre iguais.
+
+![Novo chamado](docs/img/08-novo-chamado.png)
+
+### Tema claro e escuro
+
+Um atributo em `<html>` troca ~200 regras de uma vez, porque nenhuma delas usa cor
+direta — todas apontam para variáveis CSS.
+
+![Tema claro](docs/img/07-dashboard-claro.png)
+
+### Responsivo
+
+![Celular](docs/img/10-celular.png)
+
+---
+
+## Multi-empresa: cada cliente vê só o que é dele
+
+O mesmo dashboard, com dois logins diferentes:
+
+| Empresa de TI (`SUPER_ADMIN`) | Cliente atendido (`ADMIN_EMPRESA`) |
 |---|---|
-| **FastAPI** | rotas, validação e Swagger automático |
-| **Pydantic** | valida dados na entrada, formata na saída |
-| **SQLAlchemy 2.x** | ORM: classes ↔ tabelas, SQL parametrizado (imune a injection) |
-| **Uvicorn** | servidor que escuta a porta |
-| **SQLite** | banco relacional em arquivo (FK, índices, transações) |
-| **pytest** | testes automatizados |
-| **pydantic-settings** | lê o `.env` (troca SQLite→PostgreSQL sem mexer no código) |
+| ![Admin](docs/img/02-dashboard.png) | ![Cliente](docs/img/09-dashboard-cliente.png) |
+| 1.000 clientes · 5.000 chamados | **1 cliente · 8 chamados** |
+| menu "Clientes" visível | menu oculto + faixa de aviso |
 
-## 4. Estrutura de pastas
+O isolamento não é cosmético: nasce de uma única dependência
+([`deps.py`](backend/app/deps.py)) que desce até todos os services e vira `WHERE` no banco —
+**inclusive no analytics**, porque número agregado também vaza informação.
 
-```
-helpdesk-platform/
-├── backend/
-│   ├── app/
-│   │   ├── main.py          # cria o app, handlers de erro, serve o frontend
-│   │   ├── config.py        # lê o .env (DATABASE_URL, limite de 80°C)
-│   │   ├── database.py      # engine, session, PRAGMA das foreign keys
-│   │   ├── enums.py         # status válidos + máquina de estados
-│   │   ├── exceptions.py    # erros de domínio
-│   │   ├── models/          # as 5 tabelas
-│   │   ├── schemas/         # contrato JSON (Pydantic)
-│   │   ├── services/        # regras de negócio  ← monitoring_service = 80°C
-│   │   └── routers/         # endpoints HTTP
-│   ├── seed.py              # popula 20 clientes, 100 chamados, etc.
-│   ├── init_db.py           # cria as tabelas
-│   └── tests/               # 34 testes pytest
-├── frontend/                # 5 páginas HTML + css/ + js/
-├── data/app.db              # o banco (NÃO versionado)
-├── .env.example             # modelo de configuração
-├── requirements.txt
-└── README.md
-```
+Trocar o id na URL não ajuda: a checagem de dono é feita também no acesso direto
+(proteção contra [IDOR](https://owasp.org/www-project-top-ten/)), e há teste automatizado
+para isso.
 
-## 5. Como instalar
+---
 
-Requisito: **Python 3.10+** (testado no 3.10). Na raiz do projeto:
+## Rodando o projeto
+
+**Pré-requisito:** Python 3.10+
 
 ```bash
-python -m venv .venv
-```
-
-Ativar o ambiente virtual:
-
-```bash
-.\.venv\Scripts\Activate.ps1
-```
-
-(No Linux/Mac: `source .venv/bin/activate`)
-
-Instalar as dependências:
-
-```bash
+git clone https://github.com/BragaDudu/helpdesk-monitoring-platform.git
+cd helpdesk-monitoring-platform
+python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Criar o arquivo de configuração a partir do modelo:
+Crie o `.env` a partir do exemplo e **gere a sua própria chave**:
 
 ```bash
 copy .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-## 6. Como criar o banco
+Popule o banco e suba o servidor:
 
 ```bash
-python -m backend.init_db
+python -m backend.seed --reset
+python -m uvicorn backend.app.main:app --reload --port 8010
 ```
 
-Cria as 5 tabelas em `data/app.db`. É idempotente — rodar de novo não apaga
-nada. (O servidor também cria as tabelas ao subir, então este passo é
-opcional.)
+Abra **http://localhost:8010** — ou use os atalhos: `INICIAR.bat`, `TESTES.bat`,
+`BANCO.bat`, `COLETOR.bat`.
 
-## 7. Como executar o seed
+### Acessos criados pelo seed
+
+| E-mail | Senha | Enxerga |
+|---|---|---|
+| `admin@helpdesk.com.br` | `admin12345` | tudo |
+| `empresa1@cliente.com.br` | `empresa12345` | só a Alfa Tecnologia |
+
+![Login](docs/img/01-login.png)
+
+### Gerando volume
 
 ```bash
-python -m backend.seed
+python -m backend.seed --reset --scale 50     # 5.000 chamados, 1.000 clientes
+python -m backend.seed --reset --chamados 200 # número exato
 ```
 
-Cria **20 clientes, 100 chamados, 18 equipamentos, ~394 leituras e ~29 alertas**.
-Os alertas nascem da regra dos 80°C (o seed chama o mesmo service da API).
+### O agente coletor
 
-- Rodar de novo **não duplica** (avisa que já há dados).
-- Para recomeçar do zero: `python -m backend.seed --reset`
-- Só ver o que existe: `python -m backend.seed --status`
-- **Esvaziar o banco** (usar só dados que você inserir): `python -m backend.seed --wipe`
-
-> O seed é opcional. O sistema funciona perfeitamente com o banco vazio —
-> basta cadastrar pela interface.
-
-### Explorar o banco pelo terminal
+Simula os sensores enviando leituras. **Deixe rodando numa janela separada** e veja
+os alertas nascendo sozinhos:
 
 ```bash
-python -m backend.db_shell
+python -m backend.agent --intervalo 60 --lote 150
 ```
 
-Console SQL próprio (o Windows não traz o `sqlite3.exe`). Atalhos:
-`.tabelas`, `.contar`, `.schema <tabela>`, `.sair`.
+Ele não importa nada do backend — fala HTTP, como o navegador, só que sem navegador.
+Num cliente real, a única função que mudaria é a que gera a temperatura: em vez de
+simular, leria o hardware.
 
-## 8. Como executar (rodar a aplicação)
+---
+
+## As três regras de negócio
+
+### 1. Temperatura acima do limite gera alerta
+
+[`monitoring_service.py`](backend/app/services/monitoring_service.py) — leitura e alerta
+entram na **mesma transação**:
+
+```python
+db.add(reading)
+db.flush()                              # gera o id, ainda não confirma
+
+if payload.temperature > threshold:     # ★ estritamente MAIOR: 80.0 não dispara
+    db.add(Alert(reading_id=reading.id, ...))
+
+db.commit()                             # os dois viram permanentes, juntos
+```
+
+É impossível existir no banco uma leitura de 90°C sem o alerta dela. E a coluna
+`alerts.reading_id` é `UNIQUE`: uma leitura gera no máximo um alerta, garantido pelo
+banco e não por um `if`.
+
+### 2. Máquina de estados do chamado
+
+```
+ABERTO  ⇄  EM_ANDAMENTO  ─→  FINALIZADO
+                                  ╳  não volta
+```
+
+Transição proibida devolve **409**. `FINALIZADO` não volta porque ao finalizar o servidor
+carimba `closed_at` — um chamado "aberto" com data de fechamento quebraria o cálculo de
+tempo médio.
+
+### 3. Cliente com histórico não é excluído
+
+Devolve **409** em vez de apagar em silêncio. A chave estrangeira usa `ON DELETE RESTRICT`
+como rede de segurança: mesmo que a checagem falhasse, o banco recusaria.
+
+---
+
+## Segurança
+
+| | |
+|---|---|
+| **Senhas** | PBKDF2-HMAC-SHA256, 240.000 iterações, salt por usuário. A senha nunca é guardada. |
+| **Token** | assinado com HMAC-SHA256. Não é criptografado (não há segredo nele) — o que ele garante é **integridade**: sem a chave não dá para virar admin editando o papel. |
+| **SQL Injection** | impossível por construção: valores vão como parâmetro (`VALUES (?, ?, ?)`), e nome de coluna na ordenação passa por lista branca. |
+| **XSS** | todo texto vindo do banco passa por `escapeHtml` antes de ir para a tela. |
+| **Enumeração de usuários** | "e-mail não existe" e "senha errada" devolvem a mesma mensagem, e gastam o mesmo tempo. |
+| **Segredos** | `SECRET_KEY` mora no `.env`, que está no `.gitignore`. |
+
+**Limitação conhecida e assumida:** o token fica no `localStorage`, que um XSS conseguiria
+ler. Em produção com dado real, o certo é cookie `httpOnly` + CSRF — porque ali a regra é
+não depender de uma barreira só.
+
+---
+
+## Testes
 
 ```bash
-uvicorn backend.app.main:app --reload
+python -m pytest -q        # ou TESTES.bat
 ```
 
-> ⚠️ Se a porta 8000 já estiver em uso, rode com outra porta:
-> `uvicorn backend.app.main:app --reload --port 8010`
+**55 testes**, com banco em memória isolado do `data/app.db`. Cobrem as três regras de
+negócio, a validação, a paginação e — o mais importante — o **isolamento entre empresas**,
+incluindo uma varredura que percorre as 14 rotas de leitura e falha se alguma responder
+sem token.
 
-## 9. Como executar os testes
+---
 
-```bash
-pytest
-```
+## Escala
 
-34 testes, banco em memória isolado (não toca no `app.db`).
+Medido com as sete consultas reais do dashboard:
 
-## 10. Como acessar o frontend
+| Chamados | Arquivo | Dashboard inteiro |
+|---:|---:|---:|
+| 5.000 | 2,6 MB | **25 ms** |
+| 50.000 | 25 MB | 413 ms |
+| 200.000 | 100 MB | 1.602 ms |
 
-Abra no navegador: **http://localhost:8000**
+O gargalo que aparece primeiro não é o tamanho do banco — é o dashboard recalcular tudo a
+cada acesso, com `GROUP BY` varrendo a tabela. A saída seria cache ou tabela de resumo.
 
-O FastAPI serve o próprio frontend (mesma origem → sem problema de CORS).
-Páginas: Dashboard, Clientes, Chamados, Equipamentos, Alertas.
+As análises são feitas **no banco**, com `GROUP BY`; o Python só embrulha em JSON. Trazer
+5.000 linhas para somar em memória funcionaria hoje e travaria em 200 mil.
 
-## 11. Documentação da API (Swagger)
+---
 
-Com o servidor no ar:
-
-- **Swagger UI** (interativo): http://localhost:8000/docs
-- **ReDoc** (leitura): http://localhost:8000/redoc
-
-Gerados automaticamente pelo FastAPI a partir dos schemas.
-
-## 12. Modelagem do banco
-
-5 tabelas, relacionamentos 1:N (exceto leitura→alerta, que é 1:0..1):
+## Estrutura
 
 ```
-clients ──1:N── tickets
-clients ──1:N── equipments ──1:N── equipment_readings ──1:1── alerts
-                    └────────1:N──────────────────────────── alerts
+backend/
+  app/
+    routers/     33 rotas — falam HTTP, sem regra de negócio
+    schemas/     contratos JSON (Pydantic) — validam e formatam
+    services/    ★ as regras de negócio
+    models/      6 tabelas (SQLAlchemy)
+    deps.py      autenticação e escopo por empresa
+    security.py  hash de senha e token
+  agent.py       o coletor (simula os sensores)
+  seed.py        popula o banco com volume configurável
+  tests/         55 testes
+frontend/
+  js/api.js      ★ camada única de fetch (token + tratamento de erro)
+  js/auth.js     sessão no navegador
+  css/style.css  design system com tokens, tema claro/escuro
+data/app.db      o banco (não versionado)
 ```
 
-Decisões principais:
+---
 
-- **Normalização**: o chamado guarda só `client_id`, nunca uma cópia do nome/
-  e-mail. Se o cliente muda de e-mail, altera-se uma linha e todos os chamados
-  refletem o novo dado.
-- **`closed_at` pode ser NULL**: um chamado aberto não tem data de fechamento.
-  A ausência é informação; preencher com data falsa quebraria o tempo médio.
-- **`alerts.reading_id` é UNIQUE**: uma leitura gera no máximo um alerta. Se
-  duas requisições chegarem juntas, o banco recusa a segunda. Garantia no banco,
-  não em `if` do Python.
-- **`ON DELETE RESTRICT`**: não se apaga cliente com histórico (devolve 409).
-- **CHECK constraints** nos enums: o banco recusa status inválido mesmo escrito
-  direto no SQLite.
-- **Foreign keys ativas**: o SQLite ignora FKs por padrão; ligamos com
-  `PRAGMA foreign_keys=ON` a cada conexão (ver `database.py`).
+## Documentação
 
-**Datas**: tudo em UTC no banco; a API devolve ISO-8601 com sufixo `Z`; só o
-JavaScript converte para o fuso local ao exibir.
+| Arquivo | O que tem |
+|---|---|
+| [CONCEITOS.md](CONCEITOS.md) | o vocabulário: API, ORM, migration, transação |
+| [BANCO_DE_DADOS.md](BANCO_DE_DADOS.md) | as 6 tabelas e as decisões de modelagem |
+| [AUTENTICACAO_EXPLICADA.md](AUTENTICACAO_EXPLICADA.md) | como o login funciona por dentro |
+| [GUIA_COMPLETO.md](GUIA_COMPLETO.md) | passo a passo de uso |
 
-## 13. Principais regras de negócio
+A API se documenta sozinha: com o servidor no ar, **http://localhost:8010/docs** abre o
+Swagger com as 33 rotas navegáveis.
 
-1. **Temperatura > 80°C gera alerta** (`services/monitoring_service.py`). Roda no
-   backend porque o navegador não é a única porta de entrada (um sensor IoT
-   chama a API direto). Leitura e alerta gravados na **mesma transação**.
-2. **Máquina de estados do chamado** (`enums.py`): ABERTO ↔ EM_ANDAMENTO →
-   FINALIZADO, sem volta. Transição inválida → 409. Ao finalizar, o servidor
-   carimba `closed_at`.
-3. **Deleção protegida**: cliente com chamados/equipamentos não pode ser
-   apagado.
+---
 
-## 14. Códigos HTTP usados
+<div align="center">
 
-`200` ok · `201` criado · `204` sem conteúdo (delete) · `400/404` não encontrado ·
-`409` conflito (e-mail duplicado, transição inválida) · `422` dado inválido ·
-`500` erro interno (com stack trace só no log, nunca na resposta).
+Projeto de avaliação técnica · Guilherme Braga
 
-## 15. Possíveis melhorias futuras
-
-- **Alembic** para migrações (hoje `create_all` basta porque o schema é fixo).
-- **PostgreSQL**: trocar `DATABASE_URL` no `.env` e instalar o driver; o código
-  não muda (a aritmética de datas já trata os dois dialetos).
-- **Autenticação** (JWT) — omitida de propósito por não ser pedida.
-- **Paginação com envelope** (`{items, total, page}`) em vez de lista pura.
-- **Alerta → chamado**: uma temperatura crítica poderia abrir um chamado
-  automaticamente, ligando os dois módulos.
+</div>
